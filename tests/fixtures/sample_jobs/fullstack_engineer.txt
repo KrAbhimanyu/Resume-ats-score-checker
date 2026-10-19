@@ -1,0 +1,17 @@
+Senior Full-Stack Software Engineer
+
+About the Role:
+We are looking for a Senior Full-Stack Engineer to design, build, and scale resilient cloud applications.
+
+Minimum Qualifications:
+- 4+ years of professional software engineering experience
+- Bachelor's degree in Computer Science, Software Engineering, or equivalent practical experience
+- Strong proficiency in Python, FastAPI, and PostgreSQL
+- Extensive experience developing interactive frontends with React and TypeScript
+- Hands-on experience with Docker, Kubernetes, and automated CI/CD pipelines
+- Proven understanding of REST API design and microservices architecture
+
+Preferred Qualifications:
+- Experience with AWS cloud infrastructure (ECS, S3, RDS)
+- Familiarity with Redis caching and Kafka message streams
+- Strong knowledge of automated unit testing with pytest or Jest

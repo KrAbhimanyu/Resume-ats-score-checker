@@ -1,0 +1,9 @@
+Data Analyst
+
+Minimum Qualifications:
+- 2+ years of experience in data analysis, business intelligence, or reporting
+- Bachelor's degree in Mathematics, Statistics, Computer Science, or related field
+- Strong SQL querying skills and experience with relational database schemas
+- Experience with Python for data manipulation and statistical analysis
+- Proven experience building dashboards using Tableau or Power BI
+- Advanced Microsoft Excel skills
