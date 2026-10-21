@@ -6,3 +6,4 @@ Object.defineProperty(window, 'scrollTo', {
   value: vi.fn(),
   writable: true,
 });
+

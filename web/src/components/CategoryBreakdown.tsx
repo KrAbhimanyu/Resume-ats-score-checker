@@ -64,3 +64,4 @@ export const CategoryBreakdown: React.FC<CategoryBreakdownProps> = ({ categories
     </div>
   );
 };
+

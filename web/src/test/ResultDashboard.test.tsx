@@ -158,3 +158,4 @@ describe('Results Dashboard Components', () => {
     expect(container.firstChild).toBeNull();
   });
 });
+

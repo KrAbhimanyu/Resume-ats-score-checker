@@ -55,3 +55,4 @@ export const JobDescriptionInput: React.FC<JobDescriptionInputProps> = ({
     </div>
   );
 };
+

@@ -82,3 +82,4 @@ describe('ResumeUploader Component', () => {
     expect(handleFileSelect).toHaveBeenCalledWith(null);
   });
 });
+

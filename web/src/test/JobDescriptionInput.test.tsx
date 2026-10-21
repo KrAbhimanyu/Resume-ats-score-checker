@@ -39,3 +39,4 @@ describe('JobDescriptionInput Component', () => {
     expect(screen.getByText(/Job description contains insufficient content/i)).toBeInTheDocument();
   });
 });
+

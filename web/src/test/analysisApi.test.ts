@@ -111,8 +111,9 @@ describe('analysisApi Service', () => {
       expect(result.overall_score).toBe(84.5);
       expect(result.match_tier).toBe('Strong Match');
       expect(capturedFormData).not.toBeNull();
-      expect(capturedFormData?.get('resume_file')).toBeDefined();
-      expect(capturedFormData?.get('job_description')).toBe(jd);
+      const fd = capturedFormData as unknown as FormData;
+      expect(fd.get('resume_file')).toBeDefined();
+      expect(fd.get('job_description')).toBe(jd);
     });
 
     it('rejects client-side if file is missing', async () => {
@@ -165,3 +166,4 @@ describe('analysisApi Service', () => {
     });
   });
 });
+

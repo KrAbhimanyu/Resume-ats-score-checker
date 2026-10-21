@@ -87,3 +87,4 @@ export interface ApiErrorResponse {
     type: string;
   }>;
 }
+

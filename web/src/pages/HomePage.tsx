@@ -103,3 +103,4 @@ export const HomePage: React.FC<HomePageProps> = ({ onStartAnalysis }) => {
     </div>
   );
 };
+
