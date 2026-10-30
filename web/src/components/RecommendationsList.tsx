@@ -1,15 +1,29 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Recommendation } from '../types/analysis';
-import { Lightbulb, Info } from 'lucide-react';
+import { Lightbulb, Info, AlertCircle, AlertTriangle, ChevronDown, ChevronUp } from 'lucide-react';
 
 interface RecommendationsListProps {
   recommendations: Recommendation[];
 }
 
 export const RecommendationsList: React.FC<RecommendationsListProps> = ({ recommendations }) => {
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+
   if (!recommendations || recommendations.length === 0) {
     return null;
   }
+
+  const toggleExpand = (id: string) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
 
   const getPriorityStyle = (priority: string) => {
     switch (priority.toLowerCase()) {
@@ -18,18 +32,24 @@ export const RecommendationsList: React.FC<RecommendationsListProps> = ({ recomm
           cardClass: 'rec-high',
           badgeBg: 'var(--color-danger-subtle)',
           badgeColor: 'var(--color-danger)',
+          Icon: AlertCircle,
+          iconColor: 'var(--color-danger)',
         };
       case 'medium':
         return {
           cardClass: 'rec-medium',
           badgeBg: 'var(--color-warning-subtle)',
           badgeColor: '#b45309',
+          Icon: AlertTriangle,
+          iconColor: 'var(--color-warning)',
         };
       default:
         return {
           cardClass: 'rec-low',
           badgeBg: 'var(--color-primary-subtle)',
           badgeColor: 'var(--color-primary)',
+          Icon: Info,
+          iconColor: 'var(--color-primary)',
         };
     }
   };
@@ -53,22 +73,59 @@ export const RecommendationsList: React.FC<RecommendationsListProps> = ({ recomm
       <div className="recommendations-list">
         {recommendations.map((rec) => {
           const style = getPriorityStyle(rec.priority);
+          const { Icon } = style;
+          const isExpanded = expandedIds.has(rec.id);
 
           return (
             <div key={rec.id} className={`recommendation-card ${style.cardClass}`}>
-              <div className="rec-header">
-                <span className="rec-title">{rec.title}</span>
-                <span
-                  className="rec-priority-badge"
-                  style={{
-                    backgroundColor: style.badgeBg,
-                    color: style.badgeColor,
-                  }}
+              {/* Clickable header row */}
+              <button
+                type="button"
+                className="rec-accordion-btn"
+                onClick={() => toggleExpand(rec.id)}
+                aria-expanded={isExpanded}
+                aria-controls={`rec-body-${rec.id}`}
+              >
+                <div className="rec-header">
+                  <span className="rec-title" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <Icon size={16} aria-hidden="true" style={{ color: style.iconColor, flexShrink: 0 }} />
+                    {rec.title}
+                  </span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}>
+                    <span
+                      className="rec-priority-badge"
+                      style={{
+                        backgroundColor: style.badgeBg,
+                        color: style.badgeColor,
+                      }}
+                    >
+                      {rec.priority} Priority
+                    </span>
+                    <span className="rec-toggle-icon" aria-hidden="true">
+                      {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                    </span>
+                  </div>
+                </div>
+              </button>
+
+              {/* Collapsible body */}
+              {isExpanded && (
+                <div
+                  id={`rec-body-${rec.id}`}
+                  className="rec-body"
                 >
-                  {rec.priority} Priority
-                </span>
-              </div>
-              <p className="rec-description">{rec.description}</p>
+                  <p className="rec-description">{rec.description}</p>
+                </div>
+              )}
+
+              {/* Always show a short preview when collapsed */}
+              {!isExpanded && (
+                <p className="rec-description rec-description-preview">
+                  {rec.description.length > 120
+                    ? `${rec.description.slice(0, 120)}…`
+                    : rec.description}
+                </p>
+              )}
             </div>
           );
         })}
@@ -76,4 +133,3 @@ export const RecommendationsList: React.FC<RecommendationsListProps> = ({ recomm
     </div>
   );
 };
-

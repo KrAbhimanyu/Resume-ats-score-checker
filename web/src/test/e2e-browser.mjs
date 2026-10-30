@@ -71,7 +71,8 @@ async function runE2E() {
 
     // -------------------------------------------------------------------------
     // Step 2: Empty Form Submission Validation
-    // -------------------------------------------------------------------------
+    // ----------------------------------------------------------------------
+    // ---
     console.log('\n[Step 2] Testing empty form submission validation...');
     const submitBtn = await page.$('button[type="submit"]');
     await submitBtn.click();

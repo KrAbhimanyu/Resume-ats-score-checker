@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { analyzeResume, checkHealth, AnalysisApiError } from '../services/analysisApi';
+import { analyzeResume, checkHealth, improveBullet, AnalysisApiError } from '../services/analysisApi';
 import { AnalysisResponse } from '../types/analysis';
 
 const mockSuccessResponse: AnalysisResponse = {
@@ -162,6 +162,46 @@ describe('analysisApi Service', () => {
       const file = new File(['mock content'], 'resume.pdf');
       await expect(analyzeResume(file, 'Job description')).rejects.toThrow(
         'Could not connect to analysis service'
+      );
+    });
+  });
+
+  describe('improveBullet', () => {
+    it('successfully sends bullet and returns BulletImprovementResponse', async () => {
+      const mockBulletResponse = {
+        original_text: 'Worked on API testing.',
+        is_weak: true,
+        issues: ["Starts with passive phrasing 'Worked on'"],
+        suggested_rewrite: 'Tested REST APIs using Postman, achieving [add verified result].',
+        what_to_add: 'Add tools and metrics.',
+        recommended_action_verbs: ['Tested', 'Validated'],
+      };
+
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+        new Response(JSON.stringify(mockBulletResponse), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      );
+
+      const res = await improveBullet('Worked on API testing.', ['Postman']);
+      expect(res.is_weak).toBe(true);
+      expect(res.suggested_rewrite).toContain('Tested REST APIs');
+      expect(res.recommended_action_verbs).toContain('Tested');
+    });
+
+    it('rejects client-side if bullet text is empty', async () => {
+      await expect(improveBullet('')).rejects.toThrow('Please enter a bullet point to analyze.');
+      await expect(improveBullet('   ')).rejects.toThrow('Please enter a bullet point to analyze.');
+    });
+
+    it('handles HTTP error responses from server', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+        new Response('', { status: 500 })
+      );
+
+      await expect(improveBullet('Some bullet text')).rejects.toThrow(
+        'Bullet improvement request failed with HTTP 500'
       );
     });
   });

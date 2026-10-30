@@ -1,4 +1,4 @@
-from typing import List, Union
+from typing import List, Union, Any
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -35,6 +35,13 @@ class Settings(BaseSettings):
     WEIGHT_EXPERIENCE_EVIDENCE: float = 20.0
     WEIGHT_EDUCATION_MATCH: float = 10.0
     WEIGHT_STRUCTURE_READABILITY: float = 10.0
+
+    @field_validator("DEBUG", mode="before")
+    @classmethod
+    def assemble_debug(cls, v: Any) -> bool:
+        if isinstance(v, str):
+            return v.lower() in ("true", "1", "yes", "on", "debug")
+        return bool(v)
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod

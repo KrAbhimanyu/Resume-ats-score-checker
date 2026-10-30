@@ -1,11 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { HomePage } from './pages/HomePage';
 import { AnalysisPage } from './pages/AnalysisPage';
+import { TargetedResumeBuilderPage } from './pages/TargetedResumeBuilderPage';
 import { checkHealth } from './services/analysisApi';
-import { FileCheck, Activity } from 'lucide-react';
+import { FileCheck, Activity, Sparkles, Target, X } from 'lucide-react';
 
 export const App: React.FC = () => {
   const [backendStatus, setBackendStatus] = useState<'checking' | 'healthy' | 'offline'>('checking');
+  const [activeTab, setActiveTab] = useState<'ats-checker' | 'targeted-builder'>('ats-checker');
+  const [bannerDismissed, setBannerDismissed] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -23,28 +26,77 @@ export const App: React.FC = () => {
   }, []);
 
   const handleStartAnalysis = () => {
-    const el = document.getElementById('workspace');
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth' });
-      // Focus the dropzone or file input if possible
-      const dropzone = el.querySelector('[role="button"]') as HTMLElement | null;
-      if (dropzone) {
-        dropzone.focus();
+    setActiveTab('ats-checker');
+    setTimeout(() => {
+      const el = document.getElementById('workspace');
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth' });
+        const dropzone = el.querySelector('[role="button"]') as HTMLElement | null;
+        if (dropzone) {
+          dropzone.focus();
+        }
       }
-    }
+    }, 100);
   };
 
   return (
     <>
+      {/* Announcement Banner */}
+      {!bannerDismissed && (
+        <div className="announcement-banner" role="banner">
+          <span className="announcement-banner-text">
+            🎉 <strong>New:</strong> Targeted Resume Builder now supports custom employer profiles!
+          </span>
+          <button
+            type="button"
+            className="announcement-banner-close"
+            aria-label="Dismiss announcement"
+            onClick={() => setBannerDismissed(true)}
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
+
       {/* Header */}
       <header className="app-header">
         <div className="container header-inner">
-          <a href="/" className="logo-wrapper" aria-label="Resume ATS Score Checker Home">
-            <div className="logo-icon" aria-hidden="true">
+          <div
+            className="logo-wrapper"
+            role="button"
+            tabIndex={0}
+            onClick={() => setActiveTab('ats-checker')}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') setActiveTab('ats-checker');
+            }}
+            aria-label="Resume ATS Score Checker Home"
+            style={{ cursor: 'pointer' }}
+          >
+            <div className="logo-icon logo-icon-hover" aria-hidden="true">
               <FileCheck size={20} />
             </div>
             <span>Resume ATS Score Checker</span>
-          </a>
+          </div>
+
+          {/* Navigation Mode Switcher */}
+          <nav className="header-nav-tabs" aria-label="Main Navigation">
+            <button
+              type="button"
+              className={`nav-tab-btn ${activeTab === 'ats-checker' ? 'nav-tab-active' : ''}`}
+              onClick={() => setActiveTab('ats-checker')}
+            >
+              <Target size={15} aria-hidden="true" />
+              <span>ATS Score Checker</span>
+            </button>
+            <button
+              type="button"
+              className={`nav-tab-btn ${activeTab === 'targeted-builder' ? 'nav-tab-active' : ''}`}
+              onClick={() => setActiveTab('targeted-builder')}
+            >
+              <Sparkles size={15} aria-hidden="true" />
+              <span>Targeted Resume Builder</span>
+            </button>
+          </nav>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
             <div
@@ -90,22 +142,44 @@ export const App: React.FC = () => {
               </span>
             </div>
 
-            <button
-              type="button"
-              className="btn btn-primary"
-              style={{ padding: '0.45rem 1rem', fontSize: '0.85rem' }}
-              onClick={handleStartAnalysis}
-            >
-              Check Resume
-            </button>
+            {activeTab === 'ats-checker' ? (
+              <button
+                type="button"
+                className="btn btn-primary"
+                style={{ padding: '0.45rem 1rem', fontSize: '0.85rem' }}
+                onClick={() => setActiveTab('targeted-builder')}
+              >
+                <Sparkles size={14} aria-hidden="true" />
+                <span>Build Targeted Resume</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="btn btn-secondary"
+                style={{ padding: '0.45rem 1rem', fontSize: '0.85rem' }}
+                onClick={() => setActiveTab('ats-checker')}
+              >
+                <Target size={14} aria-hidden="true" />
+                <span>Standard ATS Checker</span>
+              </button>
+            )}
           </div>
         </div>
       </header>
 
       {/* Main Content */}
       <main style={{ flex: 1 }}>
-        <HomePage onStartAnalysis={handleStartAnalysis} />
-        <AnalysisPage />
+        {activeTab === 'ats-checker' ? (
+          <>
+            <HomePage
+              onStartAnalysis={handleStartAnalysis}
+              onOpenTargetedBuilder={() => setActiveTab('targeted-builder')}
+            />
+            <AnalysisPage />
+          </>
+        ) : (
+          <TargetedResumeBuilderPage onSwitchToAtsChecker={() => setActiveTab('ats-checker')} />
+        )}
       </main>
 
       {/* Footer */}
@@ -118,7 +192,7 @@ export const App: React.FC = () => {
 
           <p style={{ maxWidth: '720px', lineHeight: 1.6, fontSize: '0.825rem' }}>
             Estimated Resume–Job Match Score calculated via deterministic heuristic algorithms.
-            Not affiliated with or endorsed by any specific commercial ATS vendor.
+            Targeted Resume Builder tailored for Big Tech and specific company roles with verifiable single-column export.
             Built with ₹0 budget using modern open-source technology.
           </p>
 

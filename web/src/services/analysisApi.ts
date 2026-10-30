@@ -1,4 +1,10 @@
-import { AnalysisResponse, HealthResponse, ApiErrorResponse } from '../types/analysis';
+import {
+  AnalysisResponse,
+  HealthResponse,
+  ApiErrorResponse,
+  BulletImprovementResponse,
+} from '../types/analysis';
+import { TargetedAnalysisResponse, StructuredResume } from '../types/builder';
 
 /**
  * Resolves the API base URL.
@@ -171,5 +177,162 @@ export async function analyzeResume(
       500
     );
   }
+}
+
+/**
+ * Sends a single bullet point to POST /api/v1/improve-bullet for on-the-fly rewriting.
+ */
+export async function improveBullet(
+  bulletText: string,
+  targetSkills?: string[],
+  signal?: AbortSignal
+): Promise<BulletImprovementResponse> {
+  const baseUrl = getApiBaseUrl();
+  const url = `${baseUrl}/api/v1/improve-bullet`;
+
+  if (!bulletText || !bulletText.trim()) {
+    throw new AnalysisApiError('Please enter a bullet point to analyze.', 'EMPTY_BULLET', 400);
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        bullet_text: bulletText.trim(),
+        target_skills: targetSkills,
+      }),
+      signal,
+    });
+  } catch (err: unknown) {
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw err;
+    }
+    const msg = err instanceof Error ? err.message : 'Network error';
+    throw new AnalysisApiError(
+      `Could not connect to bullet improvement service (${msg}).`,
+      'NETWORK_FAILURE',
+      0
+    );
+  }
+
+  if (!response.ok) {
+    throw new AnalysisApiError(
+      `Bullet improvement request failed with HTTP ${response.status}`,
+      'API_ERROR',
+      response.status
+    );
+  }
+
+  return (await response.json()) as BulletImprovementResponse;
+}
+
+/**
+ * Analyzes resume against target company and role for Targeted Resume Builder.
+ */
+export async function analyzeAndPlanTargetedResume(
+  params: {
+    resumeFile?: File | null;
+    resumeText?: string;
+    targetMode: string;
+    companyName: string;
+    industry?: string;
+    jobTitle: string;
+    jobDescription?: string;
+    sectionsToImprove?: string[];
+  },
+  signal?: AbortSignal
+): Promise<TargetedAnalysisResponse> {
+  const baseUrl = getApiBaseUrl();
+  const url = `${baseUrl}/api/v1/builder/analyze-and-plan`;
+
+  const formData = new FormData();
+  if (params.resumeFile) {
+    formData.append('resume_file', params.resumeFile, params.resumeFile.name);
+  }
+  if (params.resumeText) {
+    formData.append('resume_text', params.resumeText);
+  }
+  formData.append('target_mode', params.targetMode);
+  formData.append('company_name', params.companyName);
+  formData.append('job_title', params.jobTitle);
+  if (params.industry) {
+    formData.append('industry', params.industry);
+  }
+  if (params.jobDescription) {
+    formData.append('job_description', params.jobDescription);
+  }
+  if (params.sectionsToImprove && params.sectionsToImprove.length > 0) {
+    formData.append('sections_to_improve', params.sectionsToImprove.join(','));
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      body: formData,
+      signal,
+    });
+  } catch (err: unknown) {
+    if (err instanceof DOMException && err.name === 'AbortError') throw err;
+    const msg = err instanceof Error ? err.message : 'Network failure';
+    throw new AnalysisApiError(`Could not connect to target builder service (${msg}).`, 'NETWORK_FAILURE', 0);
+  }
+
+  if (!response.ok) {
+    let errorMsg = `Targeted analysis failed with HTTP ${response.status}`;
+    try {
+      const errData = await response.json();
+      if (errData?.detail) errorMsg = errData.detail;
+      else if (errData?.error?.message) errorMsg = errData.error.message;
+    } catch {
+      // ignore
+    }
+    throw new AnalysisApiError(errorMsg, 'BUILDER_ERROR', response.status);
+  }
+
+  return (await response.json()) as TargetedAnalysisResponse;
+}
+
+/**
+ * Exports approved structured resume as a downloadable binary Blob (PDF or DOCX).
+ */
+export async function exportResume(
+  resume: StructuredResume,
+  format: 'pdf' | 'docx',
+  filename?: string,
+  signal?: AbortSignal
+): Promise<Blob> {
+  const baseUrl = getApiBaseUrl();
+  const url = `${baseUrl}/api/v1/builder/export`;
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        format,
+        resume,
+        filename: filename || 'targeted_resume',
+      }),
+      signal,
+    });
+  } catch (err: unknown) {
+    if (err instanceof DOMException && err.name === 'AbortError') throw err;
+    const msg = err instanceof Error ? err.message : 'Network failure';
+    throw new AnalysisApiError(`Could not export resume (${msg}).`, 'NETWORK_FAILURE', 0);
+  }
+
+  if (!response.ok) {
+    throw new AnalysisApiError(`Resume export failed with HTTP ${response.status}`, 'EXPORT_ERROR', response.status);
+  }
+
+  return await response.blob();
 }
 

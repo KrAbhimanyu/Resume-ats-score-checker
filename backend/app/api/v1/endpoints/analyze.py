@@ -7,6 +7,7 @@ from app.services.extractor import extract_resume_text
 from app.services.parser import extract_job_requirements, parse_resume_content
 from app.services.scoring import calculate_ats_score
 from app.services.recommender import generate_recommendations
+from app.services.assistant import generate_improvement_assistant
 from app.services.synonyms import normalize_text
 
 router = APIRouter()
@@ -70,14 +71,24 @@ async def analyze_resume(
         category_scores=category_scores,
     )
 
-    # 7. Safe Logging (Strict privacy guarantee: NEVER log document text or PII)
+    # 7. Generate Personalized Resume Improvement Assistant Payload
+    improvement_assistant = generate_improvement_assistant(
+        parsed_job=parsed_job,
+        parsed_resume=parsed_resume,
+        norm_resume_text=clean_resume_text,
+        norm_job_text=norm_job,
+        matched_reqs=matched_reqs,
+        missing_reqs=missing_reqs,
+    )
+
+    # 8. Safe Logging (Strict privacy guarantee: NEVER log document text or PII)
     duration_ms = round((time.time() - start_time) * 1000, 2)
     logger.info(
         f"Analysis completed in {duration_ms}ms | File: {resume_file.filename} | Type: {file_type} | Size: {len(content)}B | "
         f"Words: {parsed_resume['word_count']} | Score: {overall_score}/100 ({match_tier})"
     )
 
-    # 8. Build and return structured response
+    # 9. Build and return structured response
     doc_metadata = DocumentMetadata(
         filename=resume_file.filename or "uploaded_document",
         file_type=file_type,
@@ -98,4 +109,5 @@ async def analyze_resume(
         keywords_found=keywords_found,
         recommendations=recommendations,
         document_metadata=doc_metadata,
+        improvement_assistant=improvement_assistant,
     )

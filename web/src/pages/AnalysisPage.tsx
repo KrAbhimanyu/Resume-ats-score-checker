@@ -5,6 +5,7 @@ import { ScoreOverview } from '../components/ScoreOverview';
 import { CategoryBreakdown } from '../components/CategoryBreakdown';
 import { KeywordAnalysis } from '../components/KeywordAnalysis';
 import { RecommendationsList } from '../components/RecommendationsList';
+import { ResumeImprovementDashboard } from '../components/ResumeImprovementDashboard';
 import { LoadingState } from '../components/LoadingState';
 import { ErrorMessage } from '../components/ErrorMessage';
 import { analyzeResume, AnalysisApiError } from '../services/analysisApi';
@@ -126,7 +127,12 @@ export const AnalysisPage: React.FC = () => {
           {/* 4. Actionable Recommendations */}
           <RecommendationsList recommendations={result.recommendations} />
 
-          {/* 5. Document Metadata & Limitations Disclaimer */}
+          {/* 5. Resume Improvement Assistant */}
+          {result.improvement_assistant && (
+            <ResumeImprovementDashboard assistant={result.improvement_assistant} />
+          )}
+
+          {/* 6. Document Metadata & Limitations Disclaimer */}
           <div className="disclaimer-card">
             <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '0.75rem', paddingBottom: '0.75rem', borderBottom: '1px solid var(--color-border)' }}>
               <span>Document: <strong>{result.document_metadata.filename}</strong> ({result.document_metadata.file_type})</span>

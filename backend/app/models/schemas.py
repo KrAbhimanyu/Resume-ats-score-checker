@@ -65,6 +65,115 @@ class DocumentMetadata(BaseModel):
     extraction_warnings: List[str] = Field(default_factory=list, description="Parser warnings (e.g., scanned PDF/OCR hint)")
 
 
+# =============================================================================
+# Resume Improvement Assistant Schemas
+# =============================================================================
+
+class StrengthItem(BaseModel):
+    """Identified strength in candidate's existing resume."""
+    title: str = Field(..., description="Short title of the identified strength")
+    description: str = Field(..., description="Contextual observation of what is working well")
+    category: str = Field(..., description="Category: formatting, skills, metrics, structure, clarity")
+
+
+class BulletImprovement(BaseModel):
+    """Personalized improvement for a weak or vague resume bullet point."""
+    id: str = Field(..., description="Unique bullet improvement identifier")
+    original_text: str = Field(..., description="Original bullet text extracted from resume")
+    issue: str = Field(..., description="Explanation of why this bullet point could be improved")
+    suggested_rewrite: str = Field(
+        ...,
+        description="Stronger rewritten version following Action + Task + Method + [Measurable Result Placeholder]",
+    )
+    what_to_add: str = Field(..., description="Specific verified information or metric the candidate should add")
+    action_verb: Optional[str] = Field(default=None, description="Recommended active verb for this bullet")
+    detected_skills: List[str] = Field(default_factory=list, description="Skills detected in this bullet")
+
+
+class JobSkillAlignment(BaseModel):
+    """Job-description skill alignment analysis."""
+    matched_skills: List[str] = Field(default_factory=list, description="Skills found in both resume and job description")
+    missing_from_resume_skills: List[str] = Field(
+        default_factory=list,
+        description="Skills required or preferred in job description but not found in resume",
+    )
+    weakly_evidenced_skills: List[str] = Field(
+        default_factory=list,
+        description="Skills mentioned in resume without active bullet context or proof",
+    )
+    ethical_guidance: str = Field(
+        default=(
+            "Important: Only add skills and experiences you truthfully possess. "
+            "For genuine skill gaps, highlight transferable background or pursue targeted learning "
+            "rather than misrepresenting qualifications."
+        ),
+        description="Ethical guidance clearly distinguishing missing from resume vs skill not possessed",
+    )
+
+
+class ActionVerbCategory(BaseModel):
+    """Group of strong action verbs categorized by impact type."""
+    category_name: str = Field(..., description="e.g. Technical & Engineering, Leadership, Optimization")
+    verbs: List[str] = Field(..., description="List of strong action verbs in this category")
+
+
+class MetricGuidanceItem(BaseModel):
+    """Prompting question and pattern to help candidates unearth verified metrics."""
+    metric_type: str = Field(..., description="e.g., Scale & Traffic, Efficiency & Time, Quality & Reliability")
+    guiding_question: str = Field(..., description="Question to prompt candidate's real memory of verified outcomes")
+    example_pattern: str = Field(..., description="Example format with [add verified result] placeholder")
+
+
+class ChecklistItem(BaseModel):
+    """Prioritized resume improvement checklist item."""
+    id: str = Field(..., description="Unique checklist identifier")
+    title: str = Field(..., description="Actionable checklist title")
+    description: str = Field(..., description="Specific guidance on completing this improvement")
+    priority: str = Field(..., description="Priority: high, medium, or low")
+    completed: bool = Field(default=False, description="Whether item has been addressed")
+
+
+class ResumeImprovementAssistant(BaseModel):
+    """Complete personalized resume improvement assistant payload."""
+    strengths: List[StrengthItem] = Field(default_factory=list, description="Identified resume strengths")
+    bullet_improvements: List[BulletImprovement] = Field(
+        default_factory=list,
+        description="Weak or vague bullet points paired with actionable rewrite suggestions",
+    )
+    skill_alignment: JobSkillAlignment = Field(..., description="Job-description skill alignment analysis")
+    recommended_verbs: List[ActionVerbCategory] = Field(
+        default_factory=list,
+        description="Curated action verbs categorized by impact type",
+    )
+    metric_guidance: List[MetricGuidanceItem] = Field(
+        default_factory=list,
+        description="Practical prompts and templates for adding verified metrics",
+    )
+    improvement_checklist: List[ChecklistItem] = Field(
+        default_factory=list,
+        description="Prioritized actionable improvement checklist",
+    )
+
+
+class BulletImprovementRequest(BaseModel):
+    """Request payload to improve an arbitrary resume bullet point."""
+    bullet_text: str = Field(..., min_length=3, max_length=1000, description="Resume bullet text to analyze and rewrite")
+    target_skills: Optional[List[str]] = Field(
+        default=None,
+        description="Optional list of target skills or technologies to incorporate if applicable",
+    )
+
+
+class BulletImprovementResponse(BaseModel):
+    """Response payload for on-the-fly bullet improvement."""
+    original_text: str = Field(..., description="Original input text")
+    is_weak: bool = Field(..., description="Whether the bullet point is weak or vague")
+    issues: List[str] = Field(default_factory=list, description="Identified issues with the bullet point")
+    suggested_rewrite: str = Field(..., description="Suggested rewrite following Action + Task + Method + [Metric]")
+    what_to_add: str = Field(..., description="What specific information the user should add")
+    recommended_action_verbs: List[str] = Field(default_factory=list, description="Recommended strong action verbs")
+
+
 class AnalysisResponse(BaseModel):
     """Complete structured ATS analysis response."""
     overall_score: float = Field(..., ge=0.0, le=100.0, description="Overall match score from 0 to 100")
@@ -77,6 +186,10 @@ class AnalysisResponse(BaseModel):
     keywords_found: List[str] = Field(default_factory=list, description="Unique relevant keywords extracted from resume")
     recommendations: List[Recommendation] = Field(..., description="Targeted actionable suggestions for the candidate")
     document_metadata: DocumentMetadata = Field(..., description="Information on parsed resume document")
+    improvement_assistant: Optional[ResumeImprovementAssistant] = Field(
+        default=None,
+        description="Personalized resume improvement suggestions, bullet rewrites, and skill alignment",
+    )
     limitations_disclaimer: str = Field(
         default=(
             "This score is an Estimated Resume–Job Match Score calculated via deterministic heuristic analysis. "
