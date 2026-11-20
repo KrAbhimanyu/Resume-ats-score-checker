@@ -1,0 +1,287 @@
+.company-intelligence-workspace {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.company-intelligence-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(19rem, 0.85fr);
+  align-items: start;
+  gap: 1rem;
+}
+
+.company-intelligence-columns > *,
+.company-intelligence-side {
+  min-width: 0;
+}
+
+.company-intelligence-side {
+  display: grid;
+  gap: 1rem;
+}
+
+.company-intelligence-results,
+.company-intelligence-profile,
+.company-intelligence-subsection,
+.company-intelligence-ai,
+.company-intelligence-review,
+.company-intelligence-comparison {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.company-intelligence-results > button {
+  display: grid;
+  gap: 0.3rem;
+  padding: 0.8rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-card);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.company-intelligence-results > button:hover,
+.company-intelligence-results > button:focus-visible {
+  border-color: var(--color-primary);
+}
+
+.company-intelligence-results span,
+.company-intelligence-results small,
+.company-intelligence-source,
+.company-intelligence-listing > span,
+.company-intelligence-review small,
+.company-intelligence-review p,
+.company-intelligence-comparison p {
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.company-intelligence-profile p,
+.company-intelligence-subsection p,
+.company-intelligence-ai p,
+.company-intelligence-review p {
+  overflow-wrap: anywhere;
+}
+
+.company-intelligence-profile dl {
+  display: grid;
+  gap: 0.55rem;
+  margin: 0;
+}
+
+.company-intelligence-profile dl > div {
+  display: grid;
+  grid-template-columns: minmax(7rem, 0.35fr) minmax(0, 1fr);
+  gap: 0.75rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.company-intelligence-profile dt {
+  color: var(--color-text-muted);
+}
+
+.company-intelligence-profile dd {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.company-intelligence-source {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+}
+
+.company-intelligence-source a,
+.company-intelligence-results a,
+.company-intelligence-listing a,
+.company-intelligence-review a,
+.company-intelligence-comparison a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--color-primary);
+  overflow-wrap: anywhere;
+}
+
+.company-intelligence-subsection h3,
+.company-intelligence-subsection h4,
+.company-intelligence-review h3,
+.company-intelligence-comparison h3 {
+  margin: 0.55rem 0 0;
+}
+
+.company-intelligence-periods,
+.company-intelligence-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.company-intelligence-periods li,
+.company-intelligence-chips span {
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  font-size: 0.8rem;
+}
+
+.company-intelligence-chips small {
+  color: var(--color-text-muted);
+}
+
+.company-intelligence-listing,
+.company-intelligence-change,
+.company-intelligence-comparison article {
+  display: grid;
+  gap: 0.4rem;
+  min-width: 0;
+  padding: 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-card);
+}
+
+.company-intelligence-listing strong {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.35rem;
+  overflow-wrap: anywhere;
+}
+
+.company-intelligence-listing svg {
+  flex: 0 0 auto;
+}
+
+.company-intelligence-unavailable {
+  padding: 0.75rem;
+  border-left: 3px solid var(--color-border);
+  background: var(--color-bg-subtle);
+}
+
+.company-intelligence-unavailable p {
+  margin-bottom: 0;
+}
+
+.company-intelligence-saved-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.company-intelligence-saved-row span {
+  overflow-wrap: anywhere;
+}
+
+.company-intelligence-saved-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.company-intelligence-saved-actions button {
+  padding: 0.25rem 0.4rem;
+  border: 0;
+  background: transparent;
+  color: var(--color-primary);
+  cursor: pointer;
+}
+
+.company-intelligence-form {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0.75rem 0;
+  color: var(--color-text-secondary);
+  font-size: 0.84rem;
+}
+
+.company-intelligence-form input,
+.company-intelligence-form select {
+  width: 100%;
+  min-width: 0;
+  min-height: 2.5rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-card);
+  color: var(--color-text-primary);
+  font: inherit;
+}
+
+.company-intelligence-review {
+  min-width: 0;
+}
+
+.company-intelligence-change label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--color-text-secondary);
+  font-size: 0.82rem;
+}
+
+.company-intelligence-change strong,
+.company-intelligence-change del {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.company-intelligence-downloads {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.company-intelligence-downloads span {
+  flex: 1 1 100%;
+}
+
+.company-intelligence-alert,
+.company-intelligence-notice {
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow-wrap: anywhere;
+}
+
+.company-intelligence-alert {
+  border-color: var(--color-danger, #dc2626);
+  color: var(--color-danger, #b91c1c);
+}
+
+.company-intelligence-notice {
+  border-color: var(--color-success, #16a34a);
+}
+
+@media (max-width: 900px) {
+  .company-intelligence-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 540px) {
+  .company-intelligence-profile dl > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.2rem;
+  }
+
+  .company-intelligence-downloads .btn {
+    flex: 1 1 100%;
+  }
+}

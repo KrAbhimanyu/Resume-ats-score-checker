@@ -4,12 +4,14 @@ import { ScoreOverview } from '../components/ScoreOverview';
 import { CategoryBreakdown } from '../components/CategoryBreakdown';
 import { LoadingState } from '../components/LoadingState';
 import { ErrorMessage } from '../components/ErrorMessage';
+import { ResumeVersionWorkspace } from '../components/ResumeVersionWorkspace';
 import {
   analyzeAndPlanTargetedResume,
   exportResume,
   analyzeResume,
   AnalysisApiError,
 } from '../services/analysisApi';
+import { downloadAnalysisReport } from '../services/analysisReport';
 import {
   TargetMode,
   TargetedAnalysisResponse,
@@ -105,6 +107,8 @@ export const TargetedResumeBuilderPage: React.FC<TargetedResumeBuilderPageProps>
   // ATS Re-analysis Result
   const [atsScoreResult, setAtsScoreResult] = useState<AnalysisResponse | null>(null);
   const [isRunningAts, setIsRunningAts] = useState<boolean>(false);
+  const [atsError, setAtsError] = useState<string | null>(null);
+  const [reportDownloadError, setReportDownloadError] = useState<string | null>(null);
 
   // Validation
   const [formErrors, setFormErrors] = useState<{ file?: string; company?: string; role?: string }>({});
@@ -120,6 +124,19 @@ export const TargetedResumeBuilderPage: React.FC<TargetedResumeBuilderPageProps>
     selectedRole === 'Other / Custom Role' && customRole.trim()
       ? customRole.trim()
       : selectedRole;
+
+  const handleDownloadAtsReport = () => {
+    if (!atsScoreResult) {
+      setReportDownloadError('No ATS analysis report is available to download.');
+      return;
+    }
+    try {
+      downloadAnalysisReport(atsScoreResult);
+      setReportDownloadError(null);
+    } catch {
+      setReportDownloadError('Unable to generate the report download. Please try again.');
+    }
+  };
 
   const toggleSection = (sec: string) => {
     setSelectedSections((prev) =>
@@ -236,14 +253,20 @@ export const TargetedResumeBuilderPage: React.FC<TargetedResumeBuilderPageProps>
   };
 
   // Export handlers
-  const handleExport = async (format: 'pdf' | 'docx') => {
-    if (!workingResume) return;
+  const handleExport = async (
+    format: 'pdf' | 'docx',
+    resumeOverride?: StructuredResume,
+    companyOverride?: string
+  ) => {
+    const resumeToExport = resumeOverride || workingResume;
+    if (!resumeToExport) return;
     setIsExporting(format);
     setExportNotice(null);
 
     try {
-      const safeFilename = `${workingResume.contact_info.full_name.replace(/[^a-zA-Z0-9]/g, '_')}_${effectiveCompany.replace(/[^a-zA-Z0-9]/g, '_')}_Resume`;
-      const blob = await exportResume(workingResume, format, safeFilename);
+      const exportCompany = companyOverride || effectiveCompany;
+      const safeFilename = `${resumeToExport.contact_info.full_name.replace(/[^a-zA-Z0-9]/g, '_')}_${exportCompany.replace(/[^a-zA-Z0-9]/g, '_')}_Resume`;
+      const blob = await exportResume(resumeToExport, format, safeFilename);
 
       // Trigger browser download
       const url = window.URL.createObjectURL(blob);
@@ -270,110 +293,20 @@ export const TargetedResumeBuilderPage: React.FC<TargetedResumeBuilderPageProps>
     if (!workingResume) return;
     setIsRunningAts(true);
     setAtsScoreResult(null);
+    setAtsError(null);
 
-    let fullText = '';
     try {
-      // Build plain text representation of the structured resume
-      const resumeLines: string[] = [
-        workingResume.contact_info.full_name,
-        `Email: ${workingResume.contact_info.email || ''} | Phone: ${workingResume.contact_info.phone || ''} | Location: ${workingResume.contact_info.location || ''}`,
-        'Professional Summary',
-        workingResume.summary,
-        'Technical Skills',
-        ...Object.entries(workingResume.skills).map(([cat, list]) => `${cat}: ${list.join(', ')}`),
-        'Professional Experience',
-        ...workingResume.experience.flatMap((e) => [
-          `${e.title} - ${e.company} (${e.start_date || ''} - ${e.end_date || 'Present'})`,
-          ...e.bullets.map((b) => `- ${b}`),
-        ]),
-        'Education',
-        ...workingResume.education.map((edu) => `${edu.degree} - ${edu.institution} (${edu.graduation_date || ''})`),
-      ];
-
-      fullText = resumeLines.join('\n');
-      const blob = new Blob([fullText], { type: 'text/plain' });
-      // Create a dummy PDF/DOCX file or run analysis with text
-      const simulatedFile = new File([blob], 'targeted_resume.docx', {
+      const docxBlob = await exportResume(workingResume, 'docx', 'targeted_resume');
+      const resumeFile = new File([docxBlob], 'targeted_resume.docx', {
         type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       });
 
       // Pass actual job description or company role guidance
       const targetJd = jobDescription.trim() || `Target Role: ${effectiveRole} at ${effectiveCompany}. Required skills: ${workingResume.skills.Languages?.join(', ')}`;
-      const atsResp = await analyzeResume(simulatedFile, targetJd);
+      const atsResp = await analyzeResume(resumeFile, targetJd);
       setAtsScoreResult(atsResp);
     } catch (err: unknown) {
-      // Fallback: if backend strictly validates magic bytes on .docx, build a client estimate
-      const matchedCount = planResult?.matched_skills.length || 5;
-      const totalCount = (planResult?.matched_skills.length || 5) + (planResult?.missing_requirements.length || 2);
-      const estScore = Math.min(95, Math.round((matchedCount / totalCount) * 100));
-
-      setAtsScoreResult({
-        overall_score: estScore,
-        score_label: 'Targeted Resume–Job Match Score',
-        match_tier: estScore >= 80 ? 'Strong Match' : 'Good Match',
-        summary: `Your targeted resume scores an estimated ${estScore}/100 match against ${effectiveCompany} requirements.`,
-        category_scores: [
-          {
-            category_id: 'keyword_coverage',
-            category_name: 'Job-Relevant Keyword Coverage',
-            score: 30,
-            max_score: 35,
-            percentage: 85.7,
-            explanation: 'High alignment with primary company qualifications.',
-            details: {},
-          },
-          {
-            category_id: 'skills_match',
-            category_name: 'Required & Preferred Skills Match',
-            score: 22,
-            max_score: 25,
-            percentage: 88,
-            explanation: 'Tailored skills matched to core role criteria.',
-            details: {},
-          },
-          {
-            category_id: 'experience_evidence',
-            category_name: 'Relevant Experience Evidence',
-            score: 18,
-            max_score: 20,
-            percentage: 90,
-            explanation: 'Rewritten with Action + Task + Method + [Metric] structure.',
-            details: {},
-          },
-          {
-            category_id: 'education_qualifications',
-            category_name: 'Education and Qualifications',
-            score: 10,
-            max_score: 10,
-            percentage: 100,
-            explanation: 'Standard academic qualifications detected.',
-            details: {},
-          },
-          {
-            category_id: 'document_structure',
-            category_name: 'Document Structure and Readability',
-            score: 10,
-            max_score: 10,
-            percentage: 100,
-            explanation: 'Single-column ATS formatting without tables or graphic blocks.',
-            details: {},
-          },
-        ],
-        matched_requirements: [],
-        missing_requirements: [],
-        keywords_found: planResult?.matched_skills.map((m) => m.name) || [],
-        recommendations: [],
-        document_metadata: {
-          filename: 'targeted_resume.docx',
-          file_type: '.docx',
-          file_size_bytes: 4096,
-          character_count: fullText.length,
-          word_count: fullText.split(/\s+/).length,
-          extraction_warnings: [],
-        },
-        limitations_disclaimer:
-          'This score represents deterministic heuristic alignment with the target role and does not guarantee employer hiring decisions.',
-      });
+      setAtsError(err instanceof Error ? err.message : 'The ATS check could not be completed. Please try again.');
     } finally {
       setIsRunningAts(false);
     }
@@ -385,6 +318,7 @@ export const TargetedResumeBuilderPage: React.FC<TargetedResumeBuilderPageProps>
     setProposedChanges([]);
     setWorkingResume(null);
     setAtsScoreResult(null);
+    setAtsError(null);
     setSelectedFile(null);
     setJobDescription('');
     setError(null);
@@ -415,23 +349,31 @@ export const TargetedResumeBuilderPage: React.FC<TargetedResumeBuilderPageProps>
           )}
         </div>
 
-        {/* Step Indicator Pills */}
-        <div className="step-pills-row" style={{ marginTop: '1.25rem' }}>
-          <div className={`step-pill ${currentStep === 1 ? 'step-pill-active' : currentStep > 1 ? 'step-pill-done' : ''}`}>
+        <nav className="step-pills-row" aria-label="Resume building progress" style={{ marginTop: '1.25rem' }}>
+          <div
+            className={`step-pill ${currentStep === 1 ? 'step-pill-active' : currentStep > 1 ? 'step-pill-done' : ''}`}
+            aria-current={currentStep === 1 ? 'step' : undefined}
+          >
             <span className="step-num">1</span>
             <span>Target Setup</span>
           </div>
           <ChevronRight size={16} className="step-divider" aria-hidden="true" />
-          <div className={`step-pill ${currentStep === 2 ? 'step-pill-active' : currentStep > 2 ? 'step-pill-done' : ''}`}>
+          <div
+            className={`step-pill ${currentStep === 2 ? 'step-pill-active' : currentStep > 2 ? 'step-pill-done' : ''}`}
+            aria-current={currentStep === 2 ? 'step' : undefined}
+          >
             <span className="step-num">2</span>
             <span>Gaps & Proposal Review</span>
           </div>
           <ChevronRight size={16} className="step-divider" aria-hidden="true" />
-          <div className={`step-pill ${currentStep === 3 ? 'step-pill-active' : ''}`}>
+          <div
+            className={`step-pill ${currentStep === 3 ? 'step-pill-active' : ''}`}
+            aria-current={currentStep === 3 ? 'step' : undefined}
+          >
             <span className="step-num">3</span>
             <span>Preview, ATS Check & Export</span>
           </div>
-        </div>
+        </nav>
       </div>
 
       {isLoading && <LoadingState />}
@@ -461,181 +403,219 @@ export const TargetedResumeBuilderPage: React.FC<TargetedResumeBuilderPageProps>
           </div>
 
           <form onSubmit={handleStartAnalysis} noValidate>
-            {/* Target Mode Selector Tabs */}
-            <div style={{ marginBottom: '1.5rem' }}>
-              <label className="form-label">Select Target Mode</label>
-              <div className="target-mode-tabs" role="tablist">
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={targetMode === 'faang_big_tech'}
-                  className={`target-tab ${targetMode === 'faang_big_tech' ? 'target-tab-active' : ''}`}
-                  onClick={() => setTargetMode('faang_big_tech')}
-                >
-                  <Building2 size={16} aria-hidden="true" />
-                  <span>FAANG / Big Tech</span>
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={targetMode === 'any_company'}
-                  className={`target-tab ${targetMode === 'any_company' ? 'target-tab-active' : ''}`}
-                  onClick={() => setTargetMode('any_company')}
-                >
-                  <Briefcase size={16} aria-hidden="true" />
-                  <span>Any Company (Startups, MNCs, Fintech, Enterprise)</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Mode A: FAANG / Big Tech Selector */}
-            {targetMode === 'faang_big_tech' && (
-              <div className="form-group" style={{ marginBottom: '1.25rem' }}>
-                <label className="form-label">Select Big Tech Employer</label>
-                <div className="company-pills-grid">
-                  {FAANG_COMPANIES.map((comp) => (
-                    <button
-                      key={comp}
-                      type="button"
-                      className={`company-pill-btn ${companyName === comp ? 'company-pill-active' : ''}`}
-                      onClick={() => setCompanyName(comp)}
-                    >
-                      {comp}
-                    </button>
-                  ))}
+            <section className="builder-form-section" aria-labelledby="builder-target-heading">
+              <div className="builder-form-section-heading">
+                <span className="builder-form-step">1</span>
+                <div>
+                  <h4 id="builder-target-heading">Choose your target</h4>
+                  <p>Pick a company or use the broader company option.</p>
                 </div>
-                {companyName === 'Other Big Tech' && (
-                  <input
-                    type="text"
-                    className="input-text"
-                    style={{ marginTop: '0.75rem' }}
-                    placeholder="Enter company name (e.g. Uber, Stripe, Airbnb, Salesforce)"
-                    value={customCompany}
-                    onChange={(e) => setCustomCompany(e.target.value)}
-                  />
+              </div>
+              <div className="builder-form-field">
+                <span className="form-label" id="target-mode-label">Target mode</span>
+                <div className="target-mode-tabs" role="tablist" aria-labelledby="target-mode-label">
+                  <button
+                    type="button"
+                    role="tab"
+                    id="target-mode-big-tech"
+                    aria-controls="target-mode-panel"
+                    aria-selected={targetMode === 'faang_big_tech'}
+                    className={`target-tab ${targetMode === 'faang_big_tech' ? 'target-tab-active' : ''}`}
+                    onClick={() => setTargetMode('faang_big_tech')}
+                  >
+                    <Building2 size={16} aria-hidden="true" />
+                    <span>FAANG / Big Tech</span>
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    id="target-mode-any-company"
+                    aria-controls="target-mode-panel"
+                    aria-selected={targetMode === 'any_company'}
+                    className={`target-tab ${targetMode === 'any_company' ? 'target-tab-active' : ''}`}
+                    onClick={() => setTargetMode('any_company')}
+                  >
+                    <Briefcase size={16} aria-hidden="true" />
+                    <span>Any Company (Startups, MNCs, Fintech, Enterprise)</span>
+                  </button>
+                </div>
+              </div>
+
+              <div
+                id="target-mode-panel"
+                className="builder-form-field"
+                role="tabpanel"
+                aria-labelledby={targetMode === 'faang_big_tech' ? 'target-mode-big-tech' : 'target-mode-any-company'}
+              >
+                {targetMode === 'faang_big_tech' ? (
+                  <div className="form-group" style={{ marginBottom: '1.25rem' }}>
+                    <span className="form-label">Select Big Tech employer</span>
+                    <div className="company-pills-grid" role="group" aria-label="Big Tech employers">
+                      {FAANG_COMPANIES.map((comp) => (
+                        <button
+                          key={comp}
+                          type="button"
+                          className={`company-pill-btn ${companyName === comp ? 'company-pill-active' : ''}`}
+                          aria-pressed={companyName === comp}
+                          onClick={() => setCompanyName(comp)}
+                        >
+                          {comp}
+                        </button>
+                      ))}
+                    </div>
+                    {companyName === 'Other Big Tech' && (
+                      <input
+                        type="text"
+                        className="input-text"
+                        style={{ marginTop: '0.75rem' }}
+                        aria-label="Custom Big Tech company name"
+                        placeholder="Enter company name (e.g. Uber, Stripe, Airbnb, Salesforce)"
+                        value={customCompany}
+                        onChange={(e) => setCustomCompany(e.target.value)}
+                      />
+                    )}
+                  </div>
+                ) : (
+                  <div className="form-grid" style={{ marginBottom: '1.25rem' }}>
+                    <div className="form-group">
+                      <label className="form-label" htmlFor="custom-comp-input">
+                        Target Company Name *
+                      </label>
+                      <input
+                        id="custom-comp-input"
+                        type="text"
+                        className="input-text"
+                        placeholder="e.g. Goldman Sachs, Spotify, HealthCo"
+                        value={customCompany}
+                        onChange={(e) => setCustomCompany(e.target.value)}
+                      />
+                      {formErrors.company && (
+                        <span style={{ color: 'var(--color-danger)', fontSize: '0.8rem' }}>{formErrors.company}</span>
+                      )}
+                    </div>
+
+                    <div className="form-group">
+                      <label className="form-label" htmlFor="industry-input">
+                        Industry (Optional)
+                      </label>
+                      <input
+                        id="industry-input"
+                        type="text"
+                        className="input-text"
+                        placeholder="e.g. Fintech, E-commerce, Healthcare, SaaS"
+                        value={industry}
+                        onChange={(e) => setIndustry(e.target.value)}
+                      />
+                    </div>
+                  </div>
                 )}
               </div>
-            )}
+            </section>
 
-            {/* Mode B: Any Company Inputs */}
-            {targetMode === 'any_company' && (
-              <div className="form-grid" style={{ marginBottom: '1.25rem' }}>
+            <section className="builder-form-section" aria-labelledby="builder-role-heading">
+              <div className="builder-form-section-heading">
+                <span className="builder-form-step">2</span>
+                <div>
+                  <h4 id="builder-role-heading">Set your role and focus</h4>
+                  <p>Choose the role and resume sections you want to improve.</p>
+                </div>
+              </div>
+              <div className="form-grid">
                 <div className="form-group">
-                  <label className="form-label" htmlFor="custom-comp-input">
-                    Target Company Name *
+                  <label className="form-label" htmlFor="role-select">
+                    Target Job Title / Role *
                   </label>
-                  <input
-                    id="custom-comp-input"
-                    type="text"
-                    className="input-text"
-                    placeholder="e.g. Goldman Sachs, Spotify, HealthCo"
-                    value={customCompany}
-                    onChange={(e) => setCustomCompany(e.target.value)}
-                  />
-                  {formErrors.company && (
-                    <span style={{ color: 'var(--color-danger)', fontSize: '0.8rem' }}>{formErrors.company}</span>
+                  <select
+                    id="role-select"
+                    className="input-select"
+                    value={selectedRole}
+                    onChange={(e) => setSelectedRole(e.target.value)}
+                  >
+                    {PREDEFINED_ROLES.map((r) => (
+                      <option key={r} value={r}>
+                        {r}
+                      </option>
+                    ))}
+                  </select>
+                  {selectedRole === 'Other / Custom Role' && (
+                    <input
+                      type="text"
+                      className="input-text"
+                      style={{ marginTop: '0.5rem' }}
+                      aria-label="Custom target job title"
+                      placeholder="Enter custom job title (e.g. Machine Learning Engineer)"
+                      value={customRole}
+                      onChange={(e) => setCustomRole(e.target.value)}
+                    />
+                  )}
+                  {formErrors.role && (
+                    <span style={{ color: 'var(--color-danger)', fontSize: '0.8rem' }}>{formErrors.role}</span>
                   )}
                 </div>
 
                 <div className="form-group">
-                  <label className="form-label" htmlFor="industry-input">
-                    Industry (Optional)
-                  </label>
-                  <input
-                    id="industry-input"
-                    type="text"
-                    className="input-text"
-                    placeholder="e.g. Fintech, E-commerce, Healthcare, SaaS"
-                    value={industry}
-                    onChange={(e) => setIndustry(e.target.value)}
-                  />
+                  <span className="form-label">Sections to improve</span>
+                  <p className="builder-field-hint">Choose one or more sections.</p>
+                  <div role="group" aria-label="Sections to improve" style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginTop: '0.35rem' }}>
+                    {[
+                      { id: 'summary', label: 'Professional Summary' },
+                      { id: 'skills', label: 'Technical Skills' },
+                      { id: 'experience', label: 'Work Experience Bullets' },
+                      { id: 'projects', label: 'Projects' },
+                    ].map((sec) => (
+                      <button
+                        key={sec.id}
+                        type="button"
+                        className={`btn ${selectedSections.includes(sec.id) ? 'btn-primary' : 'btn-secondary'} btn-small`}
+                        aria-pressed={selectedSections.includes(sec.id)}
+                        onClick={() => toggleSection(sec.id)}
+                      >
+                        {selectedSections.includes(sec.id) ? (
+                          <CheckSquare size={14} aria-hidden="true" />
+                        ) : (
+                          <Square size={14} aria-hidden="true" />
+                        )}
+                        <span>{sec.label}</span>
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
-            )}
+            </section>
 
-            {/* Role / Job Title Selection */}
-            <div className="form-grid" style={{ marginBottom: '1.25rem' }}>
-              <div className="form-group">
-                <label className="form-label" htmlFor="role-select">
-                  Target Job Title / Role *
-                </label>
-                <select
-                  id="role-select"
-                  className="input-select"
-                  value={selectedRole}
-                  onChange={(e) => setSelectedRole(e.target.value)}
-                >
-                  {PREDEFINED_ROLES.map((r) => (
-                    <option key={r} value={r}>
-                      {r}
-                    </option>
-                  ))}
-                </select>
-                {selectedRole === 'Other / Custom Role' && (
-                  <input
-                    type="text"
-                    className="input-text"
-                    style={{ marginTop: '0.5rem' }}
-                    placeholder="Enter custom job title (e.g. Machine Learning Engineer)"
-                    value={customRole}
-                    onChange={(e) => setCustomRole(e.target.value)}
-                  />
-                )}
-                {formErrors.role && (
-                  <span style={{ color: 'var(--color-danger)', fontSize: '0.8rem' }}>{formErrors.role}</span>
-                )}
-              </div>
-
-              {/* Sections to Improve Checkboxes */}
-              <div className="form-group">
-                <label className="form-label">Sections to Improve</label>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginTop: '0.35rem' }}>
-                  {[
-                    { id: 'summary', label: 'Professional Summary' },
-                    { id: 'skills', label: 'Technical Skills' },
-                    { id: 'experience', label: 'Work Experience Bullets' },
-                    { id: 'projects', label: 'Projects' },
-                  ].map((sec) => (
-                    <button
-                      key={sec.id}
-                      type="button"
-                      className={`btn ${selectedSections.includes(sec.id) ? 'btn-primary' : 'btn-secondary'} btn-small`}
-                      onClick={() => toggleSection(sec.id)}
-                    >
-                      {selectedSections.includes(sec.id) ? (
-                        <CheckSquare size={14} aria-hidden="true" />
-                      ) : (
-                        <Square size={14} aria-hidden="true" />
-                      )}
-                      <span>{sec.label}</span>
-                    </button>
-                  ))}
+            <section className="builder-form-section" aria-labelledby="builder-job-heading">
+              <div className="builder-form-section-heading">
+                <span className="builder-form-step">3</span>
+                <div>
+                  <h4 id="builder-job-heading">Add the job posting <span className="builder-optional-label">Optional</span></h4>
+                  <p>A real job description gives the most specific keyword and requirement matching.</p>
                 </div>
               </div>
-            </div>
-
-            {/* Optional Actual Job Description */}
-            <div className="form-group" style={{ marginBottom: '1.5rem' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
-                <label className="form-label" htmlFor="jd-textarea" style={{ margin: 0 }}>
-                  Paste Actual Job Description (Optional — Highest Priority)
-                </label>
-                <span style={{ fontSize: '0.78rem', color: 'var(--color-text-muted)' }}>
-                  If omitted, verified company & role culture benchmarks will be applied
-                </span>
+              <div className="form-group">
+                <label className="form-label" htmlFor="jd-textarea">Job description</label>
+                <textarea
+                  id="jd-textarea"
+                  className="input-textarea"
+                  rows={4}
+                  placeholder="Paste the job posting description here to extract exact requirements, qualifications, and keyword expectations..."
+                  value={jobDescription}
+                  onChange={(e) => setJobDescription(e.target.value)}
+                />
+                <div className="builder-input-meta">
+                  <span>If omitted, company and role guidance will be used.</span>
+                  <span>{jobDescription.length.toLocaleString()} characters</span>
+                </div>
               </div>
-              <textarea
-                id="jd-textarea"
-                className="input-textarea"
-                rows={4}
-                placeholder="Paste the job posting description here to extract exact requirements, qualifications, and keyword expectations..."
-                value={jobDescription}
-                onChange={(e) => setJobDescription(e.target.value)}
-              />
-            </div>
+            </section>
 
-            {/* File Upload Section */}
-            <div style={{ marginBottom: '1.75rem' }}>
+            <section className="builder-form-section" aria-labelledby="builder-resume-heading">
+              <div className="builder-form-section-heading">
+                <span className="builder-form-step">4</span>
+                <div>
+                  <h4 id="builder-resume-heading">Upload your resume <span className="builder-required-label">Required</span></h4>
+                  <p>Start with the resume you want to tailor.</p>
+                </div>
+              </div>
               <ResumeUploader
                 selectedFile={selectedFile}
                 onFileSelect={(file) => {
@@ -645,7 +625,7 @@ export const TargetedResumeBuilderPage: React.FC<TargetedResumeBuilderPageProps>
                 error={formErrors.file}
                 disabled={isLoading}
               />
-            </div>
+            </section>
 
             {/* Submit Action Bar */}
             <div className="workspace-actions">
@@ -782,12 +762,15 @@ export const TargetedResumeBuilderPage: React.FC<TargetedResumeBuilderPageProps>
                   Review and accept, edit, or reject each suggested upgrade. All approved rewrites will be applied to your draft resume.
                 </p>
               </div>
-              <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--color-primary)' }}>
+              <div className="proposal-acceptance-count" aria-live="polite">
                 {proposedChanges.filter((c) => c.is_accepted).length} of {proposedChanges.length} accepted
               </div>
             </div>
 
             <div className="proposed-changes-list">
+              {proposedChanges.length === 0 && (
+                <div className="builder-empty-state">No rewrite suggestions were generated for this resume.</div>
+              )}
               {proposedChanges.map((change) => {
                 const isEditing = editingChangeId === change.id;
 
@@ -823,6 +806,7 @@ export const TargetedResumeBuilderPage: React.FC<TargetedResumeBuilderPageProps>
                           type="button"
                           className="btn btn-secondary btn-small"
                           onClick={() => handleRestoreChange(change.id)}
+                          aria-label={`Restore default suggestion for ${change.section}`}
                           title="Restore default suggested rewrite"
                         >
                           <RotateCcw size={12} aria-hidden="true" />
@@ -831,6 +815,7 @@ export const TargetedResumeBuilderPage: React.FC<TargetedResumeBuilderPageProps>
                         <button
                           type="button"
                           className={`btn ${change.is_accepted ? 'btn-success' : 'btn-secondary'} btn-small`}
+                          aria-pressed={change.is_accepted}
                           onClick={() => toggleAcceptChange(change.id)}
                         >
                           {change.is_accepted ? (
@@ -863,6 +848,7 @@ export const TargetedResumeBuilderPage: React.FC<TargetedResumeBuilderPageProps>
                           <textarea
                             className="bullet-edit-textarea"
                             rows={3}
+                            aria-label={`Edit suggested rewrite for ${change.section}`}
                             value={editingText}
                             onChange={(e) => setEditingText(e.target.value)}
                           />
@@ -874,9 +860,9 @@ export const TargetedResumeBuilderPage: React.FC<TargetedResumeBuilderPageProps>
                       </div>
                     </div>
 
-                    {/* Verification Guidance */}
-                    <div style={{ marginTop: '0.65rem', fontSize: '0.8rem', color: 'var(--color-text-muted)' }}>
-                      <strong>Required verification:</strong> {change.what_to_verify}
+                    <div className="proposal-guidance">
+                      <p><strong>Why this change:</strong> {change.rationale}</p>
+                      <p><strong>Verify before accepting:</strong> {change.what_to_verify}</p>
                     </div>
                   </div>
                 );
@@ -956,6 +942,20 @@ export const TargetedResumeBuilderPage: React.FC<TargetedResumeBuilderPageProps>
               </div>
             </div>
 
+            {atsError && (
+              <div className="alert alert-danger" role="alert" style={{ marginTop: '0.75rem', marginBottom: 0 }}>
+                <span>{atsError}</span>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-small"
+                  disabled={isRunningAts}
+                  onClick={handleRunAtsCheck}
+                >
+                  Retry ATS check
+                </button>
+              </div>
+            )}
+
             {exportNotice && (
               <div className="alert alert-success" style={{ marginTop: '0.75rem', marginBottom: 0 }}>
                 <CheckCircle2 size={16} aria-hidden="true" />
@@ -984,11 +984,18 @@ export const TargetedResumeBuilderPage: React.FC<TargetedResumeBuilderPageProps>
 
                 <ScoreOverview
                   score={atsScoreResult.overall_score}
+                  categoryScores={atsScoreResult.category_scores}
                   scoreLabel={atsScoreResult.score_label}
                   matchTier={atsScoreResult.match_tier}
                   summary={atsScoreResult.summary}
                   onReset={() => setAtsScoreResult(null)}
+                  onDownload={handleDownloadAtsReport}
                 />
+                {reportDownloadError && (
+                  <div className="alert alert-warning" role="alert" style={{ marginTop: '0.75rem' }}>
+                    {reportDownloadError}
+                  </div>
+                )}
 
                 <CategoryBreakdown categories={atsScoreResult.category_scores} />
               </div>
@@ -1117,6 +1124,14 @@ export const TargetedResumeBuilderPage: React.FC<TargetedResumeBuilderPageProps>
               </div>
             )}
           </div>
+
+          <ResumeVersionWorkspace
+            resume={workingResume}
+            targetRole={effectiveRole}
+            targetCompany={effectiveCompany}
+            onRestore={setWorkingResume}
+            onExport={(version, format, company) => handleExport(format, version, company)}
+          />
 
           {/* Bottom Navigation */}
           <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '2rem' }}>

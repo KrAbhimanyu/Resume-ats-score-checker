@@ -2,6 +2,83 @@ import re
 from typing import Dict, List, Set, Tuple, Optional
 
 
+_SPACED_HEADING_KEYS = {
+    "professional summary",
+    "summary",
+    "profile",
+    "about me",
+    "career objective",
+    "objective",
+    "work experience",
+    "professional experience",
+    "employment history",
+    "experience",
+    "work history",
+    "technical skills",
+    "core competencies",
+    "skills and technologies",
+    "skills technologies",
+    "skills",
+    "technologies",
+    "education",
+    "academic background",
+    "academic qualifications",
+    "academic credentials",
+    "academic history",
+    "qualifications",
+    "projects",
+    "personal projects",
+    "key projects",
+    "academic projects",
+    "certifications",
+    "certificates",
+    "licenses",
+    "courses and certifications",
+}
+_SPACED_HEADING_TEXT = {
+    re.sub(r"[^a-z]", "", heading): heading.title()
+    for heading in _SPACED_HEADING_KEYS
+}
+
+
+def _restore_spaced_headings(text: str) -> str:
+    lines: List[str] = []
+    for line in text.splitlines(keepends=True):
+        words = re.findall(r"[A-Za-z]+", line)
+        compact = "".join(words).lower()
+        single_letter_ratio = sum(len(word) == 1 for word in words) / max(1, len(words))
+        if (
+            len(words) >= 5
+            and single_letter_ratio >= 0.7
+            and compact in _SPACED_HEADING_TEXT
+        ):
+            match = re.search(r"[A-Za-z].*[A-Za-z]", line)
+            if match:
+                line = line[:match.start()] + _SPACED_HEADING_TEXT[compact] + line[match.end():]
+        lines.append(line)
+    return "".join(lines)
+
+
+def normalize_resume_text(text: str) -> str:
+    """Normalize extracted layout while preserving case and line-level structure."""
+    if not text:
+        return ""
+    cleaned = text.replace("\r\n", "\n").replace("\r", "\n")
+    cleaned = cleaned.replace("\u00a0", " ").replace("\u200b", "")
+    cleaned = _restore_spaced_headings(cleaned)
+    cleaned = re.sub(r"[\u2022\u2023\u25E6\u2043\u2219\u25AA\u25CF]", "- ", cleaned)
+    cleaned = re.sub(r"[\u2013\u2014]", "-", cleaned)
+
+    lines: List[str] = []
+    for line in cleaned.split("\n"):
+        if re.fullmatch(r"\s*(?:page\s*)?\d+(?:\s*(?:of|/)\s*\d+)?\s*", line, re.IGNORECASE):
+            continue
+        line = re.sub(r"[ \t]+", " ", line).strip()
+        lines.append(line)
+
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+
+
 # Canonical key -> list of synonyms, aliases, or alternate spellings
 DEFAULT_SYNONYM_MAP: Dict[str, List[str]] = {
     "python": ["python3", "python 3", "py"],
@@ -64,6 +141,7 @@ def normalize_text(text: str) -> str:
         return ""
     # Replace non-breaking spaces and unusual whitespace
     cleaned = text.replace("\u00a0", " ").replace("\u200b", " ")
+    cleaned = _restore_spaced_headings(cleaned)
     # Normalize bullet points and dashes
     cleaned = re.sub(r"[\u2022\u2023\u25E6\u2043\u2219\u25AA\u25CF]", " - ", cleaned)
     cleaned = re.sub(r"[\u2013\u2014]", "-", cleaned)

@@ -47,7 +47,7 @@
 
 Evaluates the qualitative depth of professional history:
 1. **Experience Section Presence (5.0 pts)**: Detects standard professional history headers (`Work Experience`, `Professional Experience`, `Employment History`).
-2. **Action Verbs Diversity (5.0 pts)**: Evaluates high-impact past-tense verbs demonstrating active ownership (e.g., `Architected`, `Engineered`, `Optimized`, `Spearheaded`).
+2. **Action Verbs Diversity (5.0 pts)**: Evaluates recognized verbs found in extracted Experience/Projects achievement statements (not contact details, headings, or summary text), such as `Architected`, `Engineered`, `Optimized`, and `Spearheaded`.
    - $\ge 5$ distinct verbs: $5.0$ pts
    - $3 - 4$ verbs: $3.5$ pts
    - $1 - 2$ verbs: $2.0$ pts
@@ -68,9 +68,11 @@ Evaluates the qualitative depth of professional history:
 
 ### 3.5 Document Structure & Readability ($W_5 = 10$)
 
-1. **Section Organization (4.0 pts)**: Detects standard ATS-recognized section headers (Experience, Education, Skills, Projects, Summary). $\ge 3$ sections: $4.0$ pts.
+1. **Section Organization (4.0 pts)**: Detects standard ATS-recognized section headers and counts a section only when content follows it (Experience, Education, Skills, Projects, Summary and common heading variations). $\ge 3$ populated sections: $4.0$ pts.
 2. **Content Length & Density (3.0 pts)**: Optimal professional resume length is $250 - 1500$ words ($3.0$ pts). Sparse documents ($<150$ words) or overly verbose documents ($>2500$ words) receive reduced marks.
-3. **Bullet Point Structure (3.0 pts)**: Rewards scannable bullet points over dense, unformatted paragraphs. $\ge 5$ bullets: $3.0$ pts.
+3. **Bullet Point Structure (3.0 pts)**: Counts achievement statements in Experience and Projects, including recognizable action-led lines; contact details, headings, and role/date lines do not count. $\ge 5$ statements: $3.0$ pts.
+
+The **Estimated Resume–Job Match Score** remains separate from the Resume Quality Report's text-only readability and impact heuristics. The impact estimate uses extracted Experience/Projects achievement statements and counts explicit numeric outcomes or scope signals, not arbitrary numbers such as phone numbers or dates. The Flesch Reading Ease estimate is withheld as “Not enough text” until at least 30 words across 3 statements can be isolated. Extraction warnings are included when standard sections are not recognized or a table-based DOCX layout cannot be visually verified.
 
 ---
 

@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -7,13 +8,25 @@ from app.api.v1.api import api_router
 from app.config import settings
 from app.core.errors import ATSCheckerException, ats_exception_handler
 from app.core.logging_config import logger
+from app.core.security import UPLOAD_REQUEST_PATHS, UploadBodyLimitMiddleware
+from app.db.database import migrate
+from app.api.v1.endpoints.career import reminder_worker
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifecycle events for startup and shutdown."""
+    migrate()
+    reminder_task = asyncio.create_task(reminder_worker())
     logger.info(f"Starting {settings.APP_NAME} v{settings.APP_VERSION} (Debug: {settings.DEBUG})")
-    yield
+    try:
+        yield
+    finally:
+        reminder_task.cancel()
+        try:
+            await reminder_task
+        except asyncio.CancelledError:
+            pass
     logger.info(f"Shutting down {settings.APP_NAME}")
 
 
@@ -21,13 +34,19 @@ app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
     description=(
-        "Production-oriented API for calculating explainable, deterministic ATS Resume match scores. "
-        "Evaluates keyword coverage, skills alignment, experience metrics, education, and formatting."
+        "Explainable ATS analysis and authenticated job intelligence, matching, and application management. "
+        "Career-platform scores use transparent deterministic resume evidence; job listings are sourced from configured providers."
     ),
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_url="/openapi.json",
     lifespan=lifespan,
+)
+
+app.add_middleware(
+    UploadBodyLimitMiddleware,
+    maximum_body_bytes=settings.MAX_UPLOAD_SIZE_BYTES + 256 * 1024,
+    upload_paths=UPLOAD_REQUEST_PATHS,
 )
 
 # ------------------------------------------------------------------------------
@@ -37,7 +56,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -49,8 +68,8 @@ app.add_exception_handler(ATSCheckerException, ats_exception_handler)
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    # Log the error safely without including request body/resume text
-    logger.error(f"Unhandled server error: {exc.__class__.__name__}: {str(exc)}")
+    # Avoid logging exception messages that may contain document-derived data.
+    logger.error(f"Unhandled server error: {exc.__class__.__name__}")
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={

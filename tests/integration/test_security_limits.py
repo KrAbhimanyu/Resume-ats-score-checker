@@ -58,7 +58,7 @@ def test_temp_file_cleanup_on_exception():
     assert not os.path.exists(created_path)
 
 
-def test_privacy_no_resume_text_in_logs(client: TestClient, caplog, sample_senior_pdf, sample_fullstack_job):
+def test_privacy_no_resume_content_or_filename_in_logs(client: TestClient, caplog, sample_senior_pdf, sample_fullstack_job):
     caplog.set_level(logging.INFO, logger="ats_checker")
 
     response = client.post(
@@ -69,9 +69,9 @@ def test_privacy_no_resume_text_in_logs(client: TestClient, caplog, sample_senio
     assert response.status_code == 200
 
     log_text = caplog.text
-    # Log must contain operational metrics:
+    # Log contains operational metrics, but not candidate-provided filenames.
     assert "Analysis completed in" in log_text
-    assert "senior_software_engineer.pdf" in log_text
+    assert "senior_software_engineer.pdf" not in log_text
 
     # Log must NOT contain personal resume sentences or PII
     assert "alex.morgan.fictional@example.com" not in log_text

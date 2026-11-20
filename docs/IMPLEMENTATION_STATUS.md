@@ -354,3 +354,24 @@ dist/assets/index-B15Etfak.js   179.40 kB │ gzip: 55.90 kB
 - Implement Storage Access Framework document picker for PDF and DOCX files.
 - Connect to the backend `/api/v1/analyze` endpoint using Retrofit/OkHttp.
 
+---
+
+# Resume Intelligence Feature Update
+
+The web project now extends its deterministic analyzer and targeted builder with:
+
+- Section-level completeness, extracted-text formatting checks, common grammar-pattern flags, approximate Flesch readability, and transparent achievement-impact signals.
+- ATS compatibility checks and a final QA checklist, plus a resume-derived professional-summary draft.
+- Browser-local, explicitly saved targeted-resume versions with restore, section comparison, and PDF/DOCX export.
+- Existing job matching, keyword gaps, missing/weak-skill evidence, actionable recommendations, bullet rewrites, action-verb guidance, and PDF/DOCX export remain in place.
+
+No generative AI provider is configured. Uploaded resumes are not retained by the server; explicit version snapshots are stored in the user's browser only. Readability, grammar, impact, and ATS compatibility are heuristic text checks and cannot verify visual page layout or employer-specific screening behavior.
+
+## Resume Studio Builder Update
+
+- Added an from-scratch editor with contact information, summary, skills, experience, education, projects, certifications, and user-defined sections.
+- Added four career-path starters (fresher, experienced, executive, and career change), industry-filtered template choices, international date presentation presets, and 60 safe template combinations.
+- PDF/DOCX exports now accept validated template and locale selections, apply the selected style, and include custom sections.
+- Added local job-description tailoring that reorders only existing skills and bullets; no missing qualifications or metrics are inserted.
+- Added explicitly saved browser-local profiles and editable cover letter, LinkedIn, and portfolio text drafts.
+- Full document translation is intentionally unavailable while local-only processing is selected. The UI explains the limitation instead of pretending that static phrase substitutions constitute translation.

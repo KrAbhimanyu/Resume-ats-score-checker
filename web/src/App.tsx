@@ -2,12 +2,19 @@ import React, { useState, useEffect } from 'react';
 import { HomePage } from './pages/HomePage';
 import { AnalysisPage } from './pages/AnalysisPage';
 import { TargetedResumeBuilderPage } from './pages/TargetedResumeBuilderPage';
+import { ResumeStudioPage } from './pages/ResumeStudioPage';
+import { CareerPlatformPage } from './pages/CareerPlatformPage';
 import { checkHealth } from './services/analysisApi';
-import { FileCheck, Activity, Sparkles, Target, X } from 'lucide-react';
+import { FileCheck, Activity, BriefcaseBusiness, Sparkles, Target, X, WandSparkles } from 'lucide-react';
 
 export const App: React.FC = () => {
   const [backendStatus, setBackendStatus] = useState<'checking' | 'healthy' | 'offline'>('checking');
-  const [activeTab, setActiveTab] = useState<'ats-checker' | 'targeted-builder'>('ats-checker');
+  const [activeTab, setActiveTab] = useState<'ats-checker' | 'targeted-builder' | 'resume-studio' | 'career-platform'>(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.has('business_checkout_session') || params.has('business_checkout_cancelled')
+      ? 'career-platform'
+      : 'ats-checker';
+  });
   const [bannerDismissed, setBannerDismissed] = useState(false);
 
   useEffect(() => {
@@ -96,6 +103,22 @@ export const App: React.FC = () => {
               <Sparkles size={15} aria-hidden="true" />
               <span>Targeted Resume Builder</span>
             </button>
+            <button
+              type="button"
+              className={`nav-tab-btn ${activeTab === 'resume-studio' ? 'nav-tab-active' : ''}`}
+              onClick={() => setActiveTab('resume-studio')}
+            >
+              <WandSparkles size={15} aria-hidden="true" />
+              <span>Resume Studio</span>
+            </button>
+            <button
+              type="button"
+              className={`nav-tab-btn ${activeTab === 'career-platform' ? 'nav-tab-active' : ''}`}
+              onClick={() => setActiveTab('career-platform')}
+            >
+              <BriefcaseBusiness size={15} aria-hidden="true" />
+              <span>Career Platform</span>
+            </button>
           </nav>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
@@ -152,6 +175,26 @@ export const App: React.FC = () => {
                 <Sparkles size={14} aria-hidden="true" />
                 <span>Build Targeted Resume</span>
               </button>
+            ) : activeTab === 'targeted-builder' ? (
+              <button
+                type="button"
+                className="btn btn-secondary"
+                style={{ padding: '0.45rem 1rem', fontSize: '0.85rem' }}
+                onClick={() => setActiveTab('ats-checker')}
+              >
+                <Target size={14} aria-hidden="true" />
+                <span>Standard ATS Checker</span>
+              </button>
+            ) : activeTab === 'career-platform' ? (
+              <button
+                type="button"
+                className="btn btn-secondary"
+                style={{ padding: '0.45rem 1rem', fontSize: '0.85rem' }}
+                onClick={() => setActiveTab('ats-checker')}
+              >
+                <Target size={14} aria-hidden="true" />
+                <span>Standard ATS Checker</span>
+              </button>
             ) : (
               <button
                 type="button"
@@ -177,8 +220,12 @@ export const App: React.FC = () => {
             />
             <AnalysisPage />
           </>
-        ) : (
+        ) : activeTab === 'targeted-builder' ? (
           <TargetedResumeBuilderPage onSwitchToAtsChecker={() => setActiveTab('ats-checker')} />
+        ) : activeTab === 'resume-studio' ? (
+          <ResumeStudioPage />
+        ) : (
+          <CareerPlatformPage />
         )}
       </main>
 
@@ -197,11 +244,11 @@ export const App: React.FC = () => {
           </p>
 
           <div style={{ display: 'flex', gap: '1.5rem', fontSize: '0.775rem', color: 'var(--color-text-muted)' }}>
-            <span>Zero Persistent File Retention</span>
+            <span>Anonymous ATS uploads are ephemeral</span>
             <span>•</span>
-            <span>No Paid AI APIs</span>
+            <span>Career Platform storage is opt-in and encrypted</span>
             <span>•</span>
-            <span>Strict Client-Side Privacy</span>
+            <span>Optional AI writing requires backend configuration and user approval</span>
           </div>
         </div>
       </footer>

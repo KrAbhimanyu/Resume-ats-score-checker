@@ -16,7 +16,7 @@ def test_clear_vs_vague_bullet_points():
     assert any("worked on" in iss.lower() for iss in issues)
     assert any("quantifiable" in iss.lower() for iss in issues)
     assert "[add verified result" in rewrite
-    assert "tested" in rewrite.lower() or "validated" in rewrite.lower() or "engineered" in rewrite.lower()
+    assert rewrite.startswith("Worked on API testing.")
 
     # Clear, well-evidenced bullet with strong verb and metric
     clear_bullet = "Architected and deployed microservices backend using Python, FastAPI, and PostgreSQL serving 100k daily users."
@@ -36,7 +36,8 @@ def test_assisted_with_passive_bullet():
     assert is_weak is True
     assert any("assisted with" in iss.lower() or "supportive" in iss.lower() for iss in issues)
     assert "[add verified result" in rewrite
-    assert "Add the specific technology" in what_to_add or "quantify" in what_to_add.lower()
+    assert rewrite.startswith("Assisted with customer support tickets")
+    assert "verify" in what_to_add.lower()
 
 
 def test_responsible_for_bullet():
@@ -46,8 +47,7 @@ def test_responsible_for_bullet():
     assert is_weak is True
     assert any("responsible for" in iss.lower() for iss in issues)
     assert "docker" in [s.lower() for s in det_skills]
-    # Rewrite should keep docker and add measurable result
-    assert "docker" in rewrite.lower()
+    assert rewrite.startswith("Responsible for managing Docker containers")
     assert "[add verified result" in rewrite
 
 
@@ -66,10 +66,44 @@ def test_empty_and_malformed_bullet():
     empty_resp = improve_single_bullet("")
     assert empty_resp.is_weak is True
     assert "empty" in empty_resp.issues[0].lower()
+    assert "no achievement rewrite" in empty_resp.suggested_rewrite.lower()
+    assert empty_resp.recommended_action_verbs == []
 
     whitespace_resp = improve_single_bullet("   \n\t  ")
     assert whitespace_resp.is_weak is True
     assert "empty" in whitespace_resp.issues[0].lower()
+    assert "no achievement rewrite" in whitespace_resp.suggested_rewrite.lower()
+
+
+def test_contact_details_and_headings_are_never_rewritten_as_achievements():
+    contact = "Email: jordan@example.com | Phone: +1 (415) 555-0134"
+    response = improve_single_bullet(contact)
+
+    assert response.original_text == contact
+    assert "no achievement rewrite" in response.suggested_rewrite.lower()
+    assert "jordan@example.com" not in response.suggested_rewrite
+
+    candidates = extract_candidate_bullets(
+        {
+            "experience": (
+                "work experience\n"
+                "- Email: jordan@example.com | Phone: +1 (415) 555-0134\n"
+                "Software Engineer - Example Co (2020 - 2024)\n"
+                "- Built internal reporting tools used by multiple departments."
+            ),
+            "projects": "",
+        },
+    )
+    assert candidates == ["- Built internal reporting tools used by multiple departments."]
+
+
+def test_rewrite_does_not_add_unsupported_technology_or_claimed_results():
+    rewrite = analyze_bullet_point("Responsible for organizing release documentation.")[2]
+
+    assert rewrite.startswith("Responsible for organizing release documentation.")
+    assert "[add verified result" in rewrite
+    assert "using [specify" not in rewrite.lower()
+    assert "engineered" not in rewrite.lower()
 
 
 def test_job_description_alignment_and_ethical_guidance():
@@ -151,4 +185,3 @@ def test_job_description_alignment_and_ethical_guidance():
     assert len(assistant.improvement_checklist) >= 3
     priorities = [c.priority for c in assistant.improvement_checklist]
     assert "high" in priorities
-

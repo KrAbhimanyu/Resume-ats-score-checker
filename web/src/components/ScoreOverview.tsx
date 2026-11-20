@@ -1,20 +1,25 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { RefreshCw, Award, Download } from 'lucide-react';
+import { CategoryScore } from '../types/analysis';
 
 interface ScoreOverviewProps {
   score: number;
+  categoryScores: CategoryScore[];
   scoreLabel: string;
   matchTier: string;
   summary: string;
   onReset: () => void;
+  onDownload: () => void;
 }
 
 export const ScoreOverview: React.FC<ScoreOverviewProps> = ({
   score,
+  categoryScores,
   scoreLabel,
   matchTier,
   summary,
   onReset,
+  onDownload,
 }) => {
   // Animated score counter
   const target = Math.round(score);
@@ -71,15 +76,6 @@ export const ScoreOverview: React.FC<ScoreOverviewProps> = ({
   };
 
   const colors = getTierColor(matchTier);
-
-  // Score breakdown bar segments (visual distribution)
-  const scoreBreakdown = [
-    { label: 'Keyword', pct: Math.min(100, score * 1.1), color: colors.stroke },
-    { label: 'Skills', pct: Math.min(100, score * 0.95), color: colors.stroke },
-    { label: 'Experience', pct: Math.min(100, score * 1.0), color: colors.stroke },
-    { label: 'Education', pct: Math.min(100, score * 0.85), color: colors.stroke },
-    { label: 'Format', pct: Math.min(100, score * 1.05), color: colors.stroke },
-  ];
 
   return (
     <div className="results-header-card">
@@ -141,16 +137,19 @@ export const ScoreOverview: React.FC<ScoreOverviewProps> = ({
 
           {/* Score breakdown mini bars */}
           <div className="score-breakdown-mini" aria-label="Score breakdown by dimension">
-            {scoreBreakdown.map((seg) => (
-              <div key={seg.label} className="score-breakdown-row">
-                <span className="score-breakdown-label">{seg.label}</span>
+            {categoryScores.map((category) => (
+              <div key={category.category_id} className="score-breakdown-row">
+                <span className="score-breakdown-label">{category.category_name}</span>
                 <div className="score-breakdown-track">
                   <div
                     className="score-breakdown-fill"
-                    style={{ width: `${Math.round(seg.pct)}%`, backgroundColor: seg.color }}
+                    style={{
+                      width: `${Math.min(100, Math.max(0, category.percentage))}%`,
+                      backgroundColor: colors.stroke,
+                    }}
                   />
                 </div>
-                <span className="score-breakdown-pct">{Math.round(seg.pct)}%</span>
+                <span className="score-breakdown-pct">{Math.round(category.percentage)}%</span>
               </div>
             ))}
           </div>
@@ -170,20 +169,16 @@ export const ScoreOverview: React.FC<ScoreOverviewProps> = ({
           <span>Analyze Another Resume</span>
         </button>
 
-        <div style={{ position: 'relative', width: '100%' }}>
-          <button
-            type="button"
-            className="btn btn-secondary"
-            disabled
-            style={{ width: '100%', whiteSpace: 'nowrap', cursor: 'not-allowed', opacity: 0.6 }}
-            aria-label="Download Report (coming soon)"
-            title="Coming soon"
-          >
-            <Download size={16} aria-hidden="true" />
-            <span>Download Report</span>
-          </button>
-          <span className="coming-soon-tooltip" aria-hidden="true">Coming Soon</span>
-        </div>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          onClick={onDownload}
+          style={{ width: '100%', whiteSpace: 'nowrap' }}
+          aria-label="Download Analysis Report"
+        >
+          <Download size={16} aria-hidden="true" />
+          <span>Download Report</span>
+        </button>
       </div>
     </div>
   );

@@ -178,7 +178,7 @@ export const ResumeImprovementDashboard: React.FC<ResumeImprovementDashboardProp
             </p>
           </div>
           <div className="formula-pill">
-            <strong>Formula:</strong> Action + Task + Method/Tech + [Measurable Result]
+            <strong>Guidance:</strong> Keep source facts; add only a verified result where applicable.
           </div>
         </div>
 

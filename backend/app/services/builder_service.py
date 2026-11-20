@@ -1,4 +1,5 @@
 import io
+from html import escape
 import re
 import uuid
 from typing import Dict, List, Any, Optional, Tuple, Set
@@ -10,7 +11,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable, KeepTogether
 
 from app.models.builder_schemas import (
     TargetMode,
@@ -483,7 +484,7 @@ def analyze_targeted_resume(
     role_profile = match_role_profile(job_title)
 
     if has_jd:
-        parsed_jd = extract_job_requirements(job_description)
+        parsed_jd = extract_job_requirements(job_description or "")
         target_skills.update(parsed_jd.get("job_skills", []))
         mandatory_reqs = parsed_jd.get("mandatory_requirements", [])
         preferred_reqs = parsed_jd.get("preferred_requirements", [])
@@ -704,11 +705,58 @@ def analyze_targeted_resume(
 # Document Exporters: DOCX and PDF
 # =============================================================================
 
-def generate_docx_resume(resume: StructuredResume) -> bytes:
+RESUME_TEMPLATE_PALETTES = {
+    "navy": ("1E3A8A", "#1e3a8a"),
+    "teal": ("0F766E", "#0f766e"),
+    "graphite": ("334155", "#334155"),
+    "burgundy": ("881337", "#881337"),
+    "forest": ("166534", "#166534"),
+    "indigo": ("4338CA", "#4338ca"),
+}
+
+
+def _template_palette(template_id: str) -> tuple[str, str]:
+    palette_name = template_id.rsplit("-", 1)[-1].lower()
+    return RESUME_TEMPLATE_PALETTES.get(palette_name, ("1E3A8A", "#1e3a8a"))
+
+
+def _format_resume_date(value: Optional[str], international_format: str) -> Optional[str]:
+    if not value:
+        return value
+    match = re.fullmatch(r"(\d{4})-(\d{1,2})", value.strip())
+    if not match:
+        return value
+    year, month = match.groups()
+    if international_format in {"us", "india"}:
+        return f"{month.zfill(2)}/{year}"
+    if international_format in {"uk", "eu", "japan"}:
+        return f"{year}-{month.zfill(2)}"
+    return value
+
+
+def generate_docx_resume(
+    resume: StructuredResume,
+    template_id: str = "ats-essential-navy",
+    international_format: str = "us",
+    font_family: str = "Calibri",
+    section_order: Optional[List[str]] = None,
+    hidden_sections: Optional[List[str]] = None,
+) -> bytes:
     """
     Generates a clean, ATS-compliant single-column Microsoft Word (.docx) document.
     """
     doc = docx.Document()
+    accent_hex, _ = _template_palette(template_id)
+    accent = RGBColor.from_string(accent_hex)
+    allowed_fonts = {"Arial", "Calibri", "Georgia", "Times New Roman"}
+    font_name = font_family if font_family in allowed_fonts else "Calibri"
+    doc.styles["Normal"].font.name = font_name
+    doc.styles["List Bullet"].font.name = font_name
+    header_alignment = (
+        WD_ALIGN_PARAGRAPH.LEFT
+        if template_id.startswith(("ats-technical-", "ats-operations-", "ats-executive-"))
+        else WD_ALIGN_PARAGRAPH.CENTER
+    )
 
     # Set 0.75 inch margins for standard ATS format
     for section in doc.sections:
@@ -719,12 +767,12 @@ def generate_docx_resume(resume: StructuredResume) -> bytes:
 
     # 1. Contact Header
     name_p = doc.add_paragraph()
-    name_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    name_p.alignment = header_alignment
     name_run = name_p.add_run(resume.contact_info.full_name)
-    name_run.font.name = "Calibri"
+    name_run.font.name = font_name
     name_run.font.size = Pt(20)
     name_run.font.bold = True
-    name_run.font.color.rgb = RGBColor(15, 23, 42)
+    name_run.font.color.rgb = accent
 
     contact_parts = []
     if resume.contact_info.email:
@@ -740,9 +788,9 @@ def generate_docx_resume(resume: StructuredResume) -> bytes:
 
     if contact_parts:
         contact_p = doc.add_paragraph()
-        contact_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        contact_p.alignment = header_alignment
         contact_run = contact_p.add_run(" | ".join(contact_parts))
-        contact_run.font.name = "Calibri"
+        contact_run.font.name = font_name
         contact_run.font.size = Pt(9.5)
         contact_run.font.color.rgb = RGBColor(71, 85, 105)
 
@@ -750,134 +798,173 @@ def generate_docx_resume(resume: StructuredResume) -> bytes:
         p = doc.add_paragraph()
         p.paragraph_format.space_before = Pt(12)
         p.paragraph_format.space_after = Pt(4)
+        p.paragraph_format.keep_with_next = True
         run = p.add_run(title.upper())
-        run.font.name = "Calibri"
+        run.font.name = font_name
         run.font.size = Pt(11)
         run.font.bold = True
-        run.font.color.rgb = RGBColor(30, 41, 59)
+        run.font.color.rgb = accent
 
-    # 2. Professional Summary
-    if resume.summary and resume.summary.strip():
-        add_section_heading("Professional Summary")
-        sp = doc.add_paragraph()
-        s_run = sp.add_run(resume.summary.strip())
-        s_run.font.name = "Calibri"
-        s_run.font.size = Pt(10)
-        sp.paragraph_format.space_after = Pt(6)
+    def render_summary():
+        if resume.summary.strip():
+            add_section_heading("Professional Summary")
+            sp = doc.add_paragraph()
+            s_run = sp.add_run(resume.summary.strip())
+            s_run.font.name = font_name
+            s_run.font.size = Pt(10)
+            sp.paragraph_format.space_after = Pt(6)
 
-    # 3. Technical Skills
-    has_skills = any(resume.skills.values())
-    if has_skills:
-        add_section_heading("Technical Skills")
-        for cat, items in resume.skills.items():
-            if items:
-                sk_p = doc.add_paragraph()
-                sk_p.paragraph_format.space_after = Pt(2)
-                bold_cat = sk_p.add_run(f"{cat}: ")
-                bold_cat.font.name = "Calibri"
-                bold_cat.font.size = Pt(10)
-                bold_cat.font.bold = True
-                skills_run = sk_p.add_run(", ".join(items))
-                skills_run.font.name = "Calibri"
-                skills_run.font.size = Pt(10)
+    def render_skills():
+        if any(resume.skills.values()):
+            add_section_heading("Technical Skills")
+            for category, items in resume.skills.items():
+                if items:
+                    paragraph = doc.add_paragraph()
+                    paragraph.paragraph_format.space_after = Pt(2)
+                    category_run = paragraph.add_run(f"{category}: ")
+                    category_run.font.name = font_name
+                    category_run.font.size = Pt(10)
+                    category_run.font.bold = True
+                    skills_run = paragraph.add_run(", ".join(items))
+                    skills_run.font.name = font_name
+                    skills_run.font.size = Pt(10)
 
-    # 4. Work Experience
-    if resume.experience:
-        add_section_heading("Professional Experience")
-        for exp in resume.experience:
-            header_p = doc.add_paragraph()
-            header_p.paragraph_format.space_before = Pt(6)
-            header_p.paragraph_format.space_after = Pt(2)
+    def render_experience():
+        if resume.experience:
+            add_section_heading("Professional Experience")
+            for exp in resume.experience:
+                header = doc.add_paragraph()
+                header.paragraph_format.space_before = Pt(6)
+                header.paragraph_format.space_after = Pt(2)
+                header.paragraph_format.keep_with_next = bool(exp.bullets)
+                title_run = header.add_run(exp.title)
+                title_run.font.name = font_name
+                title_run.font.size = Pt(10.5)
+                title_run.font.bold = True
+                company_run = header.add_run(f" | {exp.company}")
+                company_run.font.name = font_name
+                company_run.font.size = Pt(10)
+                company_run.font.italic = True
+                start_date = _format_resume_date(exp.start_date, international_format)
+                end_date = _format_resume_date(exp.end_date, international_format)
+                date_run = header.add_run(f" ({start_date or ''} - {end_date or 'Present'})")
+                date_run.font.name = font_name
+                date_run.font.size = Pt(9.5)
+                date_run.font.color.rgb = RGBColor(100, 116, 139)
+                for bullet in exp.bullets:
+                    paragraph = doc.add_paragraph(style="List Bullet")
+                    paragraph.paragraph_format.space_after = Pt(2)
+                    run = paragraph.add_run(bullet)
+                    run.font.name = font_name
+                    run.font.size = Pt(9.5)
 
-            title_run = header_p.add_run(exp.title)
-            title_run.font.name = "Calibri"
-            title_run.font.size = Pt(10.5)
-            title_run.font.bold = True
+    def render_projects():
+        if resume.projects:
+            add_section_heading("Key Projects")
+            for project in resume.projects:
+                paragraph = doc.add_paragraph()
+                paragraph.paragraph_format.space_before = Pt(4)
+                paragraph.paragraph_format.space_after = Pt(2)
+                paragraph.paragraph_format.keep_with_next = bool(project.bullets)
+                title_run = paragraph.add_run(project.title)
+                title_run.font.name = font_name
+                title_run.font.size = Pt(10)
+                title_run.font.bold = True
+                if project.technologies:
+                    tech_run = paragraph.add_run(f" [{', '.join(project.technologies)}]")
+                    tech_run.font.name = font_name
+                    tech_run.font.size = Pt(9)
+                    tech_run.font.italic = True
+                for bullet in project.bullets:
+                    bullet_paragraph = doc.add_paragraph(style="List Bullet")
+                    bullet_paragraph.paragraph_format.space_after = Pt(2)
+                    run = bullet_paragraph.add_run(bullet)
+                    run.font.name = font_name
+                    run.font.size = Pt(9.5)
 
-            comp_run = header_p.add_run(f" | {exp.company}")
-            comp_run.font.name = "Calibri"
-            comp_run.font.size = Pt(10)
-            comp_run.font.italic = True
+    def render_education():
+        if resume.education:
+            add_section_heading("Education")
+            for education in resume.education:
+                paragraph = doc.add_paragraph()
+                paragraph.paragraph_format.space_after = Pt(2)
+                degree_run = paragraph.add_run(education.degree)
+                degree_run.font.name = font_name
+                degree_run.font.size = Pt(10)
+                degree_run.font.bold = True
+                institution_run = paragraph.add_run(f" - {education.institution}")
+                institution_run.font.name = font_name
+                institution_run.font.size = Pt(10)
+                graduation_date = _format_resume_date(education.graduation_date, international_format)
+                if graduation_date:
+                    date_run = paragraph.add_run(f" ({graduation_date})")
+                    date_run.font.name = font_name
+                    date_run.font.size = Pt(9.5)
+                    date_run.font.color.rgb = RGBColor(100, 116, 139)
 
-            dates_str = f" ({exp.start_date or ''} - {exp.end_date or 'Present'})"
-            date_run = header_p.add_run(dates_str)
-            date_run.font.name = "Calibri"
-            date_run.font.size = Pt(9.5)
-            date_run.font.color.rgb = RGBColor(100, 116, 139)
+    def render_certifications():
+        if resume.certifications:
+            add_section_heading("Certifications")
+            for certification in resume.certifications:
+                paragraph = doc.add_paragraph(style="List Bullet")
+                paragraph.paragraph_format.space_after = Pt(2)
+                run = paragraph.add_run(certification)
+                run.font.name = font_name
+                run.font.size = Pt(9.5)
 
-            for bullet in exp.bullets:
-                bp = doc.add_paragraph(style="List Bullet")
-                bp.paragraph_format.space_after = Pt(2)
-                b_run = bp.add_run(bullet)
-                b_run.font.name = "Calibri"
-                b_run.font.size = Pt(9.5)
+    def render_custom_sections():
+        for section_name, entries in resume.custom_sections.items():
+            if section_name.strip() and entries:
+                add_section_heading(section_name)
+                for entry in entries:
+                    paragraph = doc.add_paragraph(style="List Bullet")
+                    paragraph.paragraph_format.space_after = Pt(2)
+                    paragraph.add_run(entry)
 
-    # 5. Projects
-    if resume.projects:
-        add_section_heading("Key Projects")
-        for proj in resume.projects:
-            pp = doc.add_paragraph()
-            pp.paragraph_format.space_before = Pt(4)
-            pp.paragraph_format.space_after = Pt(2)
-            pt_run = pp.add_run(proj.title)
-            pt_run.font.name = "Calibri"
-            pt_run.font.size = Pt(10)
-            pt_run.font.bold = True
-
-            if proj.technologies:
-                tech_run = pp.add_run(f" [{', '.join(proj.technologies)}]")
-                tech_run.font.name = "Calibri"
-                tech_run.font.size = Pt(9)
-                tech_run.font.italic = True
-
-            for bullet in proj.bullets:
-                bp = doc.add_paragraph(style="List Bullet")
-                bp.paragraph_format.space_after = Pt(2)
-                b_run = bp.add_run(bullet)
-                b_run.font.name = "Calibri"
-                b_run.font.size = Pt(9.5)
-
-    # 6. Education
-    if resume.education:
-        add_section_heading("Education")
-        for edu in resume.education:
-            ep = doc.add_paragraph()
-            ep.paragraph_format.space_after = Pt(2)
-            deg_run = ep.add_run(edu.degree)
-            deg_run.font.name = "Calibri"
-            deg_run.font.size = Pt(10)
-            deg_run.font.bold = True
-
-            inst_run = ep.add_run(f" - {edu.institution}")
-            inst_run.font.name = "Calibri"
-            inst_run.font.size = Pt(10)
-
-            if edu.graduation_date:
-                gr_run = ep.add_run(f" ({edu.graduation_date})")
-                gr_run.font.name = "Calibri"
-                gr_run.font.size = Pt(9.5)
-                gr_run.font.color.rgb = RGBColor(100, 116, 139)
-
-    # 7. Certifications
-    if resume.certifications:
-        add_section_heading("Certifications")
-        for cert in resume.certifications:
-            cp = doc.add_paragraph(style="List Bullet")
-            cp.paragraph_format.space_after = Pt(2)
-            c_run = cp.add_run(cert)
-            c_run.font.name = "Calibri"
-            c_run.font.size = Pt(9.5)
+    section_renderers = {
+        "summary": render_summary,
+        "skills": render_skills,
+        "experience": render_experience,
+        "projects": render_projects,
+        "education": render_education,
+        "certifications": render_certifications,
+        "custom": render_custom_sections,
+    }
+    order = section_order or list(section_renderers)
+    hidden = set(hidden_sections or [])
+    for section_id in order:
+        renderer = section_renderers.get(section_id)
+        if renderer and section_id not in hidden:
+            renderer()
 
     output = io.BytesIO()
     doc.save(output)
     return output.getvalue()
 
 
-def generate_pdf_resume(resume: StructuredResume) -> bytes:
+def generate_pdf_resume(
+    resume: StructuredResume,
+    template_id: str = "ats-essential-navy",
+    international_format: str = "us",
+    font_family: str = "Calibri",
+    section_order: Optional[List[str]] = None,
+    hidden_sections: Optional[List[str]] = None,
+) -> bytes:
     """
     Generates a clean, ATS-compliant single-column PDF document using ReportLab.
     Uses standard vector fonts (Helvetica) with zero image/table trickery.
     """
+    _, accent_hex = _template_palette(template_id)
+    accent_color = colors.HexColor(accent_hex)
+    font_family_map = {
+        "Arial": "Helvetica",
+        "Calibri": "Helvetica",
+        "Georgia": "Times-Roman",
+        "Times New Roman": "Times-Roman",
+    }
+    font_name = font_family_map.get(font_family, "Helvetica")
+    bold_font = "Times-Bold" if font_name == "Times-Roman" else "Helvetica-Bold"
+    header_alignment = 0 if template_id.startswith(("ats-technical-", "ats-operations-", "ats-executive-")) else 1
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
         buffer,
@@ -894,21 +981,21 @@ def generate_pdf_resume(resume: StructuredResume) -> bytes:
     name_style = ParagraphStyle(
         "ResumeName",
         parent=styles["Normal"],
-        fontName="Helvetica-Bold",
+        fontName=bold_font,
         fontSize=18,
         leading=22,
-        alignment=1,  # Center
-        textColor=colors.HexColor("#0f172a"),
+        alignment=header_alignment,
+        textColor=accent_color,
         spaceAfter=4,
     )
 
     contact_style = ParagraphStyle(
         "ResumeContact",
         parent=styles["Normal"],
-        fontName="Helvetica",
+        fontName=font_name,
         fontSize=9,
         leading=12,
-        alignment=1,  # Center
+        alignment=header_alignment,
         textColor=colors.HexColor("#475569"),
         spaceAfter=12,
     )
@@ -916,19 +1003,20 @@ def generate_pdf_resume(resume: StructuredResume) -> bytes:
     heading_style = ParagraphStyle(
         "ResumeHeading",
         parent=styles["Normal"],
-        fontName="Helvetica-Bold",
+        fontName=bold_font,
         fontSize=11,
         leading=14,
-        textColor=colors.HexColor("#1e293b"),
+        textColor=accent_color,
         spaceBefore=10,
         spaceAfter=3,
         textTransform="uppercase",
+        keepWithNext=1,
     )
 
     body_style = ParagraphStyle(
         "ResumeBody",
         parent=styles["Normal"],
-        fontName="Helvetica",
+        fontName=font_name,
         fontSize=9.5,
         leading=13.5,
         textColor=colors.HexColor("#1e293b"),
@@ -938,7 +1026,7 @@ def generate_pdf_resume(resume: StructuredResume) -> bytes:
     bullet_style = ParagraphStyle(
         "ResumeBullet",
         parent=styles["Normal"],
-        fontName="Helvetica",
+        fontName=font_name,
         fontSize=9,
         leading=13,
         leftIndent=14,
@@ -950,84 +1038,123 @@ def generate_pdf_resume(resume: StructuredResume) -> bytes:
     story = []
 
     # 1. Contact Header
-    story.append(Paragraph(resume.contact_info.full_name, name_style))
+    story.append(Paragraph(escape(resume.contact_info.full_name), name_style))
 
     contact_parts = []
     if resume.contact_info.email:
-        contact_parts.append(resume.contact_info.email)
+        contact_parts.append(escape(resume.contact_info.email))
     if resume.contact_info.phone:
-        contact_parts.append(resume.contact_info.phone)
+        contact_parts.append(escape(resume.contact_info.phone))
     if resume.contact_info.location:
-        contact_parts.append(resume.contact_info.location)
+        contact_parts.append(escape(resume.contact_info.location))
     if resume.contact_info.linkedin:
-        contact_parts.append(resume.contact_info.linkedin)
+        contact_parts.append(escape(resume.contact_info.linkedin))
     if resume.contact_info.github:
-        contact_parts.append(resume.contact_info.github)
+        contact_parts.append(escape(resume.contact_info.github))
 
     if contact_parts:
         story.append(Paragraph(" &nbsp;|&nbsp; ".join(contact_parts), contact_style))
 
-    story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#cbd5e1"), spaceAfter=8))
+    story.append(HRFlowable(width="100%", thickness=1, color=accent_color, spaceAfter=8))
 
     # Helper for Section Title with Divider
     def add_section(title: str):
-        story.append(Paragraph(title, heading_style))
-        story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#e2e8f0"), spaceAfter=5))
+        story.append(Paragraph(escape(title), heading_style))
+        story.append(HRFlowable(width="100%", thickness=0.5, color=accent_color, spaceAfter=5))
 
-    # 2. Professional Summary
-    if resume.summary and resume.summary.strip():
-        add_section("Professional Summary")
-        story.append(Paragraph(resume.summary.strip(), body_style))
-        story.append(Spacer(1, 4))
-
-    # 3. Technical Skills
-    has_skills = any(resume.skills.values())
-    if has_skills:
-        add_section("Technical Skills")
-        for cat, items in resume.skills.items():
-            if items:
-                skill_text = f"<b>{cat}:</b> {', '.join(items)}"
-                story.append(Paragraph(skill_text, body_style))
-        story.append(Spacer(1, 4))
-
-    # 4. Work Experience
-    if resume.experience:
-        add_section("Professional Experience")
-        for exp in resume.experience:
-            dates = f" ({exp.start_date or ''} - {exp.end_date or 'Present'})"
-            header_text = f"<b>{exp.title}</b> &nbsp;|&nbsp; <i>{exp.company}</i> <font color='#64748b'>{dates}</font>"
-            story.append(Paragraph(header_text, body_style))
-            for bullet in exp.bullets:
-                # Clean characters for ReportLab XML parser
-                safe_bullet = bullet.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-                story.append(Paragraph(f"&bull; {safe_bullet}", bullet_style))
+    def render_summary():
+        if resume.summary.strip():
+            add_section("Professional Summary")
+            story.append(Paragraph(escape(resume.summary.strip()), body_style))
             story.append(Spacer(1, 4))
 
-    # 5. Projects
-    if resume.projects:
-        add_section("Key Projects")
-        for proj in resume.projects:
-            tech = f" [<i>{', '.join(proj.technologies)}</i>]" if proj.technologies else ""
-            story.append(Paragraph(f"<b>{proj.title}</b>{tech}", body_style))
-            for bullet in proj.bullets:
-                safe_bullet = bullet.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-                story.append(Paragraph(f"&bull; {safe_bullet}", bullet_style))
+    def render_skills():
+        if any(resume.skills.values()):
+            add_section("Technical Skills")
+            for category, items in resume.skills.items():
+                if items:
+                    skill_text = f"<b>{escape(category)}:</b> {escape(', '.join(items))}"
+                    story.append(Paragraph(skill_text, body_style))
             story.append(Spacer(1, 4))
 
-    # 6. Education
-    if resume.education:
-        add_section("Education")
-        for edu in resume.education:
-            year = f" ({edu.graduation_date})" if edu.graduation_date else ""
-            story.append(Paragraph(f"<b>{edu.degree}</b> - {edu.institution}<font color='#64748b'>{year}</font>", body_style))
-        story.append(Spacer(1, 4))
+    def render_experience():
+        if resume.experience:
+            add_section("Professional Experience")
+            for experience in resume.experience:
+                start_date = _format_resume_date(experience.start_date, international_format)
+                end_date = _format_resume_date(experience.end_date, international_format)
+                dates = f" ({start_date or ''} - {end_date or 'Present'})"
+                header_text = (
+                    f"<b>{escape(experience.title)}</b> &nbsp;|&nbsp; "
+                    f"<i>{escape(experience.company)}</i> "
+                    f"<font color='#64748b'>{escape(dates)}</font>"
+                )
+                paragraphs = [Paragraph(header_text, body_style)]
+                paragraphs.extend(
+                    Paragraph(f"&bull; {escape(bullet)}", bullet_style)
+                    for bullet in experience.bullets[:1]
+                )
+                story.append(KeepTogether(paragraphs))
+                for bullet in experience.bullets[1:]:
+                    story.append(Paragraph(f"&bull; {escape(bullet)}", bullet_style))
+                story.append(Spacer(1, 4))
 
-    # 7. Certifications
-    if resume.certifications:
-        add_section("Certifications")
-        for cert in resume.certifications:
-            safe_cert = cert.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-            story.append(Paragraph(f"&bull; {safe_cert}", bullet_style))
+    def render_projects():
+        if resume.projects:
+            add_section("Key Projects")
+            for project in resume.projects:
+                tech = f" [<i>{escape(', '.join(project.technologies))}</i>]" if project.technologies else ""
+                paragraphs = [Paragraph(f"<b>{escape(project.title)}</b>{tech}", body_style)]
+                paragraphs.extend(
+                    Paragraph(f"&bull; {escape(bullet)}", bullet_style)
+                    for bullet in project.bullets[:1]
+                )
+                story.append(KeepTogether(paragraphs))
+                for bullet in project.bullets[1:]:
+                    story.append(Paragraph(f"&bull; {escape(bullet)}", bullet_style))
+                story.append(Spacer(1, 4))
+
+    def render_education():
+        if resume.education:
+            add_section("Education")
+            for education in resume.education:
+                graduation_date = _format_resume_date(education.graduation_date, international_format)
+                year = f" ({graduation_date})" if graduation_date else ""
+                text = (
+                    f"<b>{escape(education.degree)}</b> - {escape(education.institution)}"
+                    f"<font color='#64748b'>{escape(year)}</font>"
+                )
+                story.append(Paragraph(text, body_style))
+            story.append(Spacer(1, 4))
+
+    def render_certifications():
+        if resume.certifications:
+            add_section("Certifications")
+            for certification in resume.certifications:
+                story.append(Paragraph(f"&bull; {escape(certification)}", bullet_style))
+
+    def render_custom_sections():
+        for section_name, entries in resume.custom_sections.items():
+            if section_name.strip() and entries:
+                add_section(section_name)
+                for entry in entries:
+                    story.append(Paragraph(f"&bull; {escape(entry)}", bullet_style))
+
+    section_renderers = {
+        "summary": render_summary,
+        "skills": render_skills,
+        "experience": render_experience,
+        "projects": render_projects,
+        "education": render_education,
+        "certifications": render_certifications,
+        "custom": render_custom_sections,
+    }
+    order = section_order or list(section_renderers)
+    hidden = set(hidden_sections or [])
+    for section_id in order:
+        renderer = section_renderers.get(section_id)
+        if renderer and section_id not in hidden:
+            renderer()
 
     doc.build(story)
     return buffer.getvalue()

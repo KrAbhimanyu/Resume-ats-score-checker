@@ -129,6 +129,10 @@ describe('TargetedResumeBuilderPage Component', () => {
     expect(screen.getByRole('tab', { name: /Any Company/i })).toBeInTheDocument();
     expect(screen.getByText('Google')).toBeInTheDocument();
     expect(screen.getByText('Amazon')).toBeInTheDocument();
+    expect(screen.getByRole('navigation', { name: /Resume building progress/i })).toBeInTheDocument();
+    expect(screen.getByText('Target Setup').closest('[aria-current="step"]')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Google' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Professional Summary' })).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('switches between FAANG and Any Company modes', () => {
@@ -177,6 +181,8 @@ describe('TargetedResumeBuilderPage Component', () => {
     expect(screen.getByText('kubernetes')).toBeInTheDocument();
     expect(screen.getByText('react')).toBeInTheDocument();
     expect(screen.getByText(/Proposed Targeted Rewrites/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/Why this change:/i)).toHaveLength(2);
+    expect(screen.getAllByText(/Verify before accepting:/i)).toHaveLength(2);
   });
 
   it('allows user to toggle accept/reject and edit proposed rewrites', async () => {
@@ -254,5 +260,30 @@ describe('TargetedResumeBuilderPage Component', () => {
 
     expect(await screen.findByText(/Successfully exported your resume to PDF/i)).toBeInTheDocument();
   });
-});
 
+  it('shows an ATS check error instead of presenting a fabricated score', async () => {
+    vi.spyOn(analysisApi, 'analyzeAndPlanTargetedResume').mockResolvedValueOnce(mockTargetedResponse);
+    const mockExportResume = vi
+      .spyOn(analysisApi, 'exportResume')
+      .mockRejectedValueOnce(new Error('Export service unavailable'));
+    const mockAnalyzeResume = vi.spyOn(analysisApi, 'analyzeResume');
+
+    render(<TargetedResumeBuilderPage />);
+
+    const file = new File(['%PDF-1.4 dummy content'], 'resume.pdf', { type: 'application/pdf' });
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    if (fileInput) {
+      fireEvent.change(fileInput, { target: { files: [file] } });
+    }
+
+    fireEvent.click(screen.getByRole('button', { name: /Analyze & Build Targeted Resume/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /Apply & Preview Resume/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /Run ATS Score Check/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Export service unavailable');
+    expect(screen.getByRole('button', { name: /Retry ATS check/i })).toBeInTheDocument();
+    expect(screen.queryByText(/ATS Match Score for Upgraded Resume/i)).not.toBeInTheDocument();
+    expect(mockExportResume).toHaveBeenCalledWith(expect.any(Object), 'docx', 'targeted_resume');
+    expect(mockAnalyzeResume).not.toHaveBeenCalled();
+  });
+});

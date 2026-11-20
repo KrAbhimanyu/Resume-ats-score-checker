@@ -3,6 +3,9 @@ import {
   HealthResponse,
   ApiErrorResponse,
   BulletImprovementResponse,
+  AnalysisProgressEvent,
+  AnalysisSessionCreated,
+  AnalysisSessionSnapshot,
 } from '../types/analysis';
 import { TargetedAnalysisResponse, StructuredResume } from '../types/builder';
 
@@ -31,6 +34,189 @@ export class AnalysisApiError extends Error {
     this.code = code;
     this.statusCode = statusCode;
     this.details = details;
+  }
+}
+
+const SESSION_HEADER = 'X-Analysis-Session-Id';
+
+async function readSessionResponse<T>(response: Response): Promise<T> {
+  if (!response.ok) {
+    throw new AnalysisApiError(
+      `Analysis progress service returned HTTP ${response.status}.`,
+      'PROGRESS_SESSION_ERROR',
+      response.status
+    );
+  }
+  return (await response.json()) as T;
+}
+
+export async function createAnalysisSession(signal?: AbortSignal): Promise<AnalysisSessionCreated> {
+  const response = await fetch(`${getApiBaseUrl()}/api/v1/analyze/session`, {
+    method: 'POST',
+    signal,
+  });
+  return readSessionResponse<AnalysisSessionCreated>(response);
+}
+
+export async function getAnalysisSession(
+  sessionId: string,
+  signal?: AbortSignal
+): Promise<AnalysisSessionSnapshot> {
+  const response = await fetch(`${getApiBaseUrl()}/api/v1/analyze/session`, {
+    headers: { [SESSION_HEADER]: sessionId },
+    signal,
+  });
+  return readSessionResponse<AnalysisSessionSnapshot>(response);
+}
+
+export async function failAnalysisSession(
+  sessionId: string,
+  signal?: AbortSignal
+): Promise<AnalysisSessionSnapshot> {
+  const response = await fetch(`${getApiBaseUrl()}/api/v1/analyze/session/fail`, {
+    method: 'POST',
+    headers: {
+      [SESSION_HEADER]: sessionId,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ error_code: 'CLIENT_INTERRUPTED' }),
+    signal,
+  });
+  return readSessionResponse<AnalysisSessionSnapshot>(response);
+}
+
+const abortableDelay = (delayMs: number, signal: AbortSignal): Promise<void> =>
+  new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new DOMException('The operation was aborted.', 'AbortError'));
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      signal.removeEventListener('abort', handleAbort);
+      resolve();
+    }, delayMs);
+    const handleAbort = () => {
+      window.clearTimeout(timer);
+      reject(new DOMException('The operation was aborted.', 'AbortError'));
+    };
+    signal.addEventListener('abort', handleAbort, { once: true });
+  });
+
+export async function streamAnalysisProgress(
+  sessionId: string,
+  onEvent: (event: AnalysisProgressEvent) => void,
+  onSnapshot: (snapshot: AnalysisSessionSnapshot) => void,
+  onConnectionChange: (connected: boolean) => void,
+  signal: AbortSignal,
+  afterEventId = 0
+): Promise<void> {
+  let lastEventId = afterEventId;
+  let retryDelay = 500;
+  const url = `${getApiBaseUrl()}/api/v1/analyze/session/events`;
+
+  while (!signal.aborted) {
+    try {
+      const response = await fetch(`${url}?after_id=${lastEventId}`, {
+        headers: {
+          [SESSION_HEADER]: sessionId,
+          ...(lastEventId > 0 ? { 'Last-Event-ID': String(lastEventId) } : {}),
+        },
+        signal,
+      });
+      if (!response.ok) {
+        throw new AnalysisApiError(
+          `Analysis progress stream returned HTTP ${response.status}.`,
+          'PROGRESS_STREAM_ERROR',
+          response.status
+        );
+      }
+      if (!response.body) {
+        throw new AnalysisApiError(
+          'The analysis progress stream is unavailable in this browser.',
+          'PROGRESS_STREAM_UNAVAILABLE',
+          0
+        );
+      }
+
+      onConnectionChange(true);
+      retryDelay = 500;
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      try {
+        while (!signal.aborted) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
+          const messages = buffer.split('\n\n');
+          buffer = messages.pop() ?? '';
+          for (const message of messages) {
+            let eventId: number | undefined;
+            let eventName = 'message';
+            const dataLines: string[] = [];
+            for (const line of message.split('\n')) {
+              if (line.startsWith('id:')) eventId = Number(line.slice(3).trim());
+              else if (line.startsWith('event:')) eventName = line.slice(6).trim();
+              else if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart());
+            }
+            if (eventName !== 'progress' || dataLines.length === 0) continue;
+            let event: AnalysisProgressEvent;
+            try {
+              event = JSON.parse(dataLines.join('\n')) as AnalysisProgressEvent;
+            } catch {
+              throw new AnalysisApiError(
+                'The server sent an unreadable analysis progress event.',
+                'INVALID_PROGRESS_EVENT',
+                500
+              );
+            }
+            if (!Number.isInteger(event.event_id) || event.event_id <= lastEventId) continue;
+            lastEventId = Math.max(event.event_id, eventId ?? 0);
+            onEvent(event);
+          }
+        }
+      } finally {
+        reader.releaseLock();
+      }
+
+      if (signal.aborted) return;
+      onConnectionChange(false);
+      const snapshot = await getAnalysisSession(sessionId, signal);
+      onSnapshot(snapshot);
+      if (snapshot.status === 'completed' || snapshot.status === 'failed') return;
+    } catch (error: unknown) {
+      if (signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) return;
+      if (
+        error instanceof AnalysisApiError
+        && ['INVALID_PROGRESS_EVENT', 'PROGRESS_STREAM_UNAVAILABLE'].includes(error.code)
+      ) {
+        onConnectionChange(false);
+        throw error;
+      }
+      if (error instanceof AnalysisApiError && error.statusCode >= 400 && error.statusCode < 500) {
+        onConnectionChange(false);
+        throw error;
+      }
+      onConnectionChange(false);
+      try {
+        const snapshot = await getAnalysisSession(sessionId, signal);
+        onSnapshot(snapshot);
+        if (snapshot.status === 'completed' || snapshot.status === 'failed') return;
+      } catch (snapshotError: unknown) {
+        if (signal.aborted || (snapshotError instanceof DOMException && snapshotError.name === 'AbortError')) {
+          return;
+        }
+        if (
+          snapshotError instanceof AnalysisApiError
+          && snapshotError.statusCode >= 400
+          && snapshotError.statusCode < 500
+        ) {
+          throw snapshotError;
+        }
+      }
+      await abortableDelay(retryDelay, signal);
+      retryDelay = Math.min(5000, retryDelay * 2);
+    }
   }
 }
 
@@ -71,7 +257,8 @@ export async function checkHealth(signal?: AbortSignal): Promise<HealthResponse>
 export async function analyzeResume(
   resumeFile: File,
   jobDescription: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  analysisSessionId?: string
 ): Promise<AnalysisResponse> {
   const baseUrl = getApiBaseUrl();
   const url = `${baseUrl}/api/v1/analyze`;
@@ -96,6 +283,7 @@ export async function analyzeResume(
     response = await fetch(url, {
       method: 'POST',
       body: formData,
+      headers: analysisSessionId ? { [SESSION_HEADER]: analysisSessionId } : undefined,
       signal,
     });
   } catch (err: unknown) {
@@ -304,7 +492,14 @@ export async function exportResume(
   resume: StructuredResume,
   format: 'pdf' | 'docx',
   filename?: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  options?: {
+    templateId?: string;
+    internationalFormat?: string;
+    fontFamily?: string;
+    sectionOrder?: string[];
+    hiddenSections?: string[];
+  }
 ): Promise<Blob> {
   const baseUrl = getApiBaseUrl();
   const url = `${baseUrl}/api/v1/builder/export`;
@@ -320,6 +515,11 @@ export async function exportResume(
         format,
         resume,
         filename: filename || 'targeted_resume',
+        template_id: options?.templateId || 'ats-essential-navy',
+        international_format: options?.internationalFormat || 'us',
+        font_family: options?.fontFamily || 'Calibri',
+        section_order: options?.sectionOrder,
+        hidden_sections: options?.hiddenSections,
       }),
       signal,
     });
@@ -335,4 +535,3 @@ export async function exportResume(
 
   return await response.blob();
 }
-

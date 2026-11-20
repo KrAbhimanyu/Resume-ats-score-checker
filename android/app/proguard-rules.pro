@@ -1,0 +1,3 @@
+-keepattributes *Annotation*
+-keep class com.resumeats.checker.data.** { *; }
+-keep interface com.resumeats.checker.data.** { *; }

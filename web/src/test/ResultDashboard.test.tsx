@@ -82,13 +82,16 @@ const mockResponse: AnalysisResponse = {
 describe('Results Dashboard Components', () => {
   it('renders ScoreOverview with score, label, and tier', () => {
     const handleReset = vi.fn();
+    const handleDownload = vi.fn();
     render(
       <ScoreOverview
         score={mockResponse.overall_score}
+        categoryScores={mockResponse.category_scores}
         scoreLabel={mockResponse.score_label}
         matchTier={mockResponse.match_tier}
         summary={mockResponse.summary}
         onReset={handleReset}
+        onDownload={handleDownload}
       />
     );
 
@@ -96,10 +99,15 @@ describe('Results Dashboard Components', () => {
     expect(screen.getByText('/100')).toBeInTheDocument();
     expect(screen.getByText('Estimated Resume–Job Match Score')).toBeInTheDocument();
     expect(screen.getByText('Strong Match')).toBeInTheDocument();
+    expect(screen.getByText('Job-Relevant Keyword Coverage')).toBeInTheDocument();
+    expect(screen.getAllByText('80%')).toHaveLength(2);
 
     const resetBtn = screen.getByRole('button', { name: /Analyze Another Resume/i });
     fireEvent.click(resetBtn);
     expect(handleReset).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: /Download Analysis Report/i }));
+    expect(handleDownload).toHaveBeenCalledTimes(1);
   });
 
   it('renders CategoryBreakdown with points and explanation', () => {
@@ -158,4 +166,3 @@ describe('Results Dashboard Components', () => {
     expect(container.firstChild).toBeNull();
   });
 });
-

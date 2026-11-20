@@ -60,6 +60,7 @@ class StructuredResume(BaseModel):
     projects: List[ProjectItem] = Field(default_factory=list, description="Key projects")
     education: List[EducationItem] = Field(default_factory=list, description="Academic qualifications")
     certifications: List[str] = Field(default_factory=list, description="Licenses and certifications")
+    custom_sections: Dict[str, List[str]] = Field(default_factory=dict, description="Candidate-defined sections")
 
 
 class RequirementGapItem(BaseModel):
@@ -134,4 +135,55 @@ class ExportResumeRequest(BaseModel):
     format: str = Field(default="pdf", description="pdf or docx")
     resume: StructuredResume
     filename: Optional[str] = Field(default="targeted_resume")
+    template_id: str = Field(default="ats-essential-navy", max_length=80)
+    international_format: str = Field(default="us", max_length=20)
+    font_family: str = Field(default="Calibri", pattern="^(Arial|Calibri|Georgia|Times New Roman)$")
+    section_order: List[str] = Field(
+        default_factory=lambda: ["summary", "skills", "experience", "projects", "education", "certifications", "custom"],
+        max_length=20,
+    )
+    hidden_sections: List[str] = Field(default_factory=list, max_length=20)
 
+
+class ResumeAIRequest(BaseModel):
+    """Grounded AI writing and optimization request for Resume Studio."""
+
+    operation: str = Field(
+        ...,
+        pattern="^(summary|experience|achievement|skills|project|bullet|optimize)$",
+    )
+    resume: StructuredResume
+    source_text: str = Field(default="", max_length=12000)
+    target_role: str = Field(default="", max_length=160)
+    job_description: str = Field(default="", max_length=15000)
+    industry: str = Field(default="", max_length=100)
+    experience_level: str = Field(default="", max_length=80)
+    tone: str = Field(default="professional", pattern="^(professional|technical|executive|entry-level|experienced|concise)$")
+
+
+class ResumeAIResponse(BaseModel):
+    operation: str
+    suggestion: Optional[str] = None
+    proposed_resume: Optional[StructuredResume] = None
+    skill_categories: Dict[str, List[str]] = Field(default_factory=dict)
+    suggested_missing_skills: List[str] = Field(default_factory=list)
+    disclaimer: str = (
+        "AI suggestions may be inaccurate. Review every claim, metric, skill, and qualification "
+        "before applying it to your resume."
+    )
+
+
+class ResumeDocumentInput(BaseModel):
+    id: str = Field(..., min_length=1, max_length=80)
+    document_type: str = Field(..., pattern="^(profile|version)$")
+    name: str = Field(..., min_length=1, max_length=120)
+    document: Dict[str, Any]
+
+
+class ResumeDocumentOutput(BaseModel):
+    id: str
+    document_type: str
+    name: str
+    document: Dict[str, Any]
+    created_at: str
+    updated_at: str

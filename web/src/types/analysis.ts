@@ -59,6 +59,39 @@ export interface DocumentMetadata {
   extraction_warnings: string[];
 }
 
+export interface QualityCheck {
+  title: string;
+  status: string;
+  detail: string;
+}
+
+export interface SectionQuality {
+  name: string;
+  found: boolean;
+  word_count: number;
+  findings: string[];
+}
+
+export interface GrammarIssue {
+  category: string;
+  excerpt: string;
+  suggestion: string;
+}
+
+export interface ResumeQualityReport {
+  section_analysis: SectionQuality[];
+  formatting_findings: string[];
+  grammar_issues: GrammarIssue[];
+  readability_score: number;
+  readability_label: string;
+  readability_explanation: string;
+  impact_score: number;
+  impact_explanation: string;
+  ats_compatibility_checks: QualityCheck[];
+  quality_assurance_checks: QualityCheck[];
+  professional_summary_draft: string;
+}
+
 export interface StrengthItem {
   title: string;
   description: string;
@@ -135,8 +168,60 @@ export interface AnalysisResponse {
   keywords_found: string[];
   recommendations: Recommendation[];
   document_metadata: DocumentMetadata;
+  quality_report?: ResumeQualityReport;
   improvement_assistant?: ResumeImprovementAssistant;
   limitations_disclaimer: string;
+}
+
+export type AnalysisProgressStatus =
+  | 'pending'
+  | 'in_progress'
+  | 'completed'
+  | 'failed'
+  | 'skipped';
+
+export interface AnalysisProgressEvent {
+  event_id: number;
+  layer_id: string;
+  step_id: string;
+  status: AnalysisProgressStatus;
+  progress_percent: number;
+  details: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface AnalysisProgressStep {
+  step_id: string;
+  label: string;
+  status: AnalysisProgressStatus;
+  progress_percent: number;
+  details: Record<string, unknown>;
+}
+
+export interface AnalysisProgressLayer {
+  layer_id: string;
+  label: string;
+  status: AnalysisProgressStatus;
+  steps: AnalysisProgressStep[];
+}
+
+export interface AnalysisSessionSnapshot {
+  session_id: string;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  created_at: string;
+  duration_ms?: number | null;
+  active_layer_id?: string | null;
+  layers: AnalysisProgressLayer[];
+  events: AnalysisProgressEvent[];
+  result?: AnalysisResponse | null;
+  report_available: boolean;
+  error_code?: string | null;
+}
+
+export interface AnalysisSessionCreated {
+  session_id: string;
+  created_at: string;
+  layers: AnalysisProgressLayer[];
 }
 
 export interface ApiErrorDetail {

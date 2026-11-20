@@ -43,6 +43,7 @@ export interface StructuredResume {
   projects: ProjectItem[];
   education: EducationItem[];
   certifications: string[];
+  custom_sections?: Record<string, string[]>;
 }
 
 export interface RequirementGapItem {
@@ -98,5 +99,70 @@ export interface ExportResumeRequest {
   format: 'pdf' | 'docx';
   resume: StructuredResume;
   filename?: string;
+  template_id?: string;
+  international_format?: string;
 }
 
+export type CareerPath = 'fresher' | 'experienced' | 'executive' | 'career-change';
+
+export interface ResumeTemplate {
+  id: string;
+  name: string;
+  family: string;
+  industry: string;
+  accent: string;
+  font: string;
+  description: string;
+}
+
+export interface ResumeProfile {
+  id: string;
+  name: string;
+  careerPath: CareerPath;
+  industry: string;
+  templateId: string;
+  fontFamily?: string;
+  previewSections?: string[];
+  hiddenSections?: string[];
+  internationalFormat: string;
+  updatedAt: string;
+  resume: StructuredResume;
+  coverLetter?: string;
+  linkedInProfile?: string;
+  portfolioDescription?: string;
+}
+
+export type ResumeAITone =
+  | 'professional'
+  | 'technical'
+  | 'executive'
+  | 'entry-level'
+  | 'experienced'
+  | 'concise';
+
+export type ResumeAIOperation =
+  | 'summary'
+  | 'experience'
+  | 'achievement'
+  | 'skills'
+  | 'project'
+  | 'bullet'
+  | 'optimize';
+
+export interface ResumeAIResponse {
+  operation: ResumeAIOperation;
+  suggestion?: string | null;
+  proposed_resume?: StructuredResume | null;
+  skill_categories: Record<string, string[]>;
+  suggested_missing_skills: string[];
+  disclaimer: string;
+}
+
+export interface ResumeCloudDocument<T = unknown> {
+  id: string;
+  document_type: 'profile' | 'version';
+  name: string;
+  document: T;
+  created_at: string;
+  updated_at: string;
+}

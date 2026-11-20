@@ -1,5 +1,6 @@
-from typing import Dict, List, Any, Tuple
+from typing import Callable, Dict, List, Any, Tuple
 from app.config import settings
+from app.models.analysis_progress import ProgressStatus
 from app.models.schemas import CategoryScore, RequirementMatch, MissingRequirement
 from app.services.synonyms import find_term_in_text
 
@@ -9,6 +10,9 @@ def calculate_ats_score(
     parsed_resume: Dict[str, Any],
     norm_resume_text: str,
     norm_job_text: str,
+    progress_callback: Callable[
+        [str, str, ProgressStatus, Dict[str, Any]], None
+    ] | None = None,
 ) -> Tuple[float, str, str, List[CategoryScore], List[RequirementMatch], List[MissingRequirement], List[str]]:
     """
     Deterministic, explainable scoring engine calculating match score from 0 to 100.
@@ -28,14 +32,33 @@ def calculate_ats_score(
     # 1. Job-Relevant Keyword Coverage (Max 35 points)
     # =========================================================================
     job_keywords: List[str] = sorted(list(parsed_job.get("job_keywords", set())))
+    matched_job_keywords: List[str] = []
+    missing_job_keywords: List[str] = []
     matched_kw_count = 0
+
+    if progress_callback:
+        progress_callback(
+            "keyword_matching",
+            "matched_keywords",
+            "in_progress",
+            {},
+        )
+        progress_callback(
+            "keyword_matching",
+            "missing_keywords",
+            "in_progress",
+            {},
+        )
 
     if job_keywords:
         for kw in job_keywords:
             matched, matched_term = find_term_in_text(kw, norm_resume_text)
             if matched:
                 matched_kw_count += 1
+                matched_job_keywords.append(kw)
                 keywords_found_set.add(matched_term or kw)
+            else:
+                missing_job_keywords.append(kw)
 
         # Keyword coverage ratio - avoids repeating credit
         kw_ratio = matched_kw_count / len(job_keywords)
@@ -44,6 +67,20 @@ def calculate_ats_score(
         # Fallback if job description has minimal distinct keywords
         kw_score = settings.WEIGHT_KEYWORD_COVERAGE
         kw_ratio = 1.0
+
+    if progress_callback:
+        progress_callback(
+            "keyword_matching",
+            "matched_keywords",
+            "completed",
+            {"matched_keywords": matched_job_keywords},
+        )
+        progress_callback(
+            "keyword_matching",
+            "missing_keywords",
+            "completed",
+            {"missing_keywords": missing_job_keywords},
+        )
 
     kw_percentage = round((kw_score / settings.WEIGHT_KEYWORD_COVERAGE) * 100, 1)
     kw_category = CategoryScore(
@@ -305,7 +342,10 @@ def calculate_ats_score(
     sections = parsed_resume.get("sections", {})
 
     # Section organization (4 pts)
-    recognized_secs = [s for s in ["experience", "education", "skills", "projects", "summary"] if s in sections]
+    recognized_secs = [
+        section for section in ("experience", "education", "skills", "projects", "summary")
+        if sections.get(section)
+    ]
     if len(recognized_secs) >= 3:
         struct_points += 4.0
     elif len(recognized_secs) >= 2:
@@ -342,7 +382,7 @@ def calculate_ats_score(
         percentage=struct_percentage,
         explanation=(
             f"Identified {len(recognized_secs)} standard resume sections ({', '.join(recognized_secs)}). "
-            f"Word count is {wc} words with {bullets} bulleted entries."
+            f"Word count is {wc} words with {bullets} experience/project achievement statement(s)."
         ),
         details={
             "recognized_sections": recognized_secs,

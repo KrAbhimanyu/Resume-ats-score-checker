@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { AnalysisPage } from '../pages/AnalysisPage';
 import * as api from '../services/analysisApi';
-import { AnalysisResponse } from '../types/analysis';
+import { ANALYSIS_PROGRESS_TEMPLATE } from '../components/AnalysisProgressView';
+import { AnalysisResponse, AnalysisSessionSnapshot } from '../types/analysis';
 
 const mockAnalysisResult: AnalysisResponse = {
   overall_score: 91.0,
@@ -46,6 +47,42 @@ const mockAnalysisResult: AnalysisResponse = {
 describe('AnalysisPage Component', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    window.localStorage.clear();
+    vi.spyOn(api, 'createAnalysisSession').mockResolvedValue({
+      session_id: 'session-1',
+      created_at: '2026-11-20T00:00:00Z',
+      layers: ANALYSIS_PROGRESS_TEMPLATE,
+    });
+    vi.spyOn(api, 'streamAnalysisProgress').mockImplementation(
+      async () => {}
+    );
+    vi.spyOn(api, 'failAnalysisSession').mockResolvedValue({
+      session_id: 'session-1',
+      status: 'failed',
+      created_at: '2026-11-20T00:00:00Z',
+      layers: ANALYSIS_PROGRESS_TEMPLATE,
+      events: [],
+      report_available: false,
+      error_code: 'ANALYSIS_FAILED',
+    } satisfies AnalysisSessionSnapshot);
+  });
+
+  it('restores a completed report from the saved analysis session after refresh', async () => {
+    window.localStorage.setItem('resume-ats-active-analysis-session', 'session-1');
+    vi.spyOn(api, 'getAnalysisSession').mockResolvedValueOnce({
+      session_id: 'session-1',
+      status: 'completed',
+      created_at: '2026-11-20T00:00:00Z',
+      layers: ANALYSIS_PROGRESS_TEMPLATE,
+      events: [],
+      result: mockAnalysisResult,
+      report_available: true,
+    });
+
+    render(<AnalysisPage />);
+
+    expect(await screen.findByText('91')).toBeInTheDocument();
+    expect(api.streamAnalysisProgress).not.toHaveBeenCalled();
   });
 
   it('shows validation errors when submitting with missing file and empty job description', async () => {
@@ -98,13 +135,13 @@ describe('AnalysisPage Component', () => {
     fireEvent.click(submitBtn);
 
     // Verify analyzeResume was called with correct arguments
-    expect(analyzeSpy).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(analyzeSpy).toHaveBeenCalledTimes(1));
 
     // Results dashboard should appear
     await waitFor(() => {
       expect(screen.getByText('91')).toBeInTheDocument();
       expect(screen.getByText('Exceptional Match')).toBeInTheDocument();
-      expect(screen.getByText('Job-Relevant Keyword Coverage')).toBeInTheDocument();
+      expect(screen.getAllByText('Job-Relevant Keyword Coverage')).toHaveLength(2);
     });
   });
 
@@ -133,11 +170,16 @@ describe('AnalysisPage Component', () => {
     fireEvent.click(submitBtn);
 
     // Should enter loading state
-    expect(screen.getByText(/Analyzing Your Resume/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Live 5-Layer ATS Scan/i)).toBeInTheDocument();
+    expect(screen.getByText(/Layer 1: Resume Parsing/i)).toBeInTheDocument();
+    expect(screen.getByText(/Layer 2: Section Detection/i)).toBeInTheDocument();
+    expect(screen.getByText(/Layer 3: Skills and Keyword Matching/i)).toBeInTheDocument();
+    expect(screen.getByText(/Layer 4: Experience and Impact Analysis/i)).toBeInTheDocument();
+    expect(screen.getByText(/Layer 5: ATS Scoring and Recommendations/i)).toBeInTheDocument();
 
     // Trying to click submit again while loading should not trigger another call
     fireEvent.click(submitBtn);
-    expect(analyzeSpy).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(analyzeSpy).toHaveBeenCalledTimes(1));
 
     // Complete the call
     // @ts-expect-error assigned in promise
@@ -146,6 +188,34 @@ describe('AnalysisPage Component', () => {
     await waitFor(() => {
       expect(screen.getByText('91')).toBeInTheDocument();
     });
+  });
+
+  it('lets a refreshed or stalled session stop and return to the upload form', async () => {
+    const analyzeSpy = vi.spyOn(api, 'analyzeResume').mockImplementationOnce(
+      (_file, _job, signal) => new Promise<AnalysisResponse>((_resolve, reject) => {
+        signal?.addEventListener(
+          'abort',
+          () => reject(new DOMException('The operation was aborted.', 'AbortError')),
+          { once: true }
+        );
+      })
+    );
+
+    render(<AnalysisPage />);
+    fireEvent.change(screen.getByLabelText(/Upload resume file/i), {
+      target: { files: [new File(['mock content'], 'alex_resume.pdf', { type: 'application/pdf' })] },
+    });
+    fireEvent.change(screen.getByLabelText(/Job Description/i), {
+      target: { value: 'Senior Software Engineer with Python and FastAPI experience.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Analyze Resume/i }));
+
+    await waitFor(() => expect(analyzeSpy).toHaveBeenCalledTimes(1));
+    fireEvent.click(await screen.findByRole('button', { name: /Stop analysis and return to upload/i }));
+
+    expect(await screen.findByLabelText(/Upload resume file/i)).toBeInTheDocument();
+    expect(api.failAnalysisSession).toHaveBeenCalledWith('session-1');
+    expect(window.localStorage.getItem('resume-ats-active-analysis-session')).toBeNull();
   });
 
   it('renders API error message when backend fails', async () => {
@@ -175,4 +245,3 @@ describe('AnalysisPage Component', () => {
     });
   });
 });
-

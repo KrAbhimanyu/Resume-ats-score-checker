@@ -1,35 +1,55 @@
 import re
-from typing import Dict, List, Set, Tuple, Optional, Any
-from app.services.synonyms import DEFAULT_SYNONYM_MAP, find_term_in_text, normalize_text
+from typing import Callable, Dict, List, Set, Tuple, Optional, Any
+from app.models.analysis_progress import ProgressStatus
+from app.services.synonyms import (
+    DEFAULT_SYNONYM_MAP,
+    find_term_in_text,
+    normalize_resume_text,
+    normalize_text,
+)
 
 
-# Standard resume section regexes
-SECTION_PATTERNS = {
-    "experience": re.compile(
-        r"(?:^|\n)(?:\s*(?:work\s+experience|professional\s+experience|employment\s+history|experience|work\s+history))\b",
-        re.IGNORECASE,
+SECTION_HEADINGS = {
+    "experience": (
+        "work experience", "professional experience", "employment history", "experience", "work history",
     ),
-    "education": re.compile(
-        r"(?:^|\n)(?:\s*(?:education|academic\s+background|academic\s+credentials|qualifications|academic\s+history))\b",
-        re.IGNORECASE,
+    "education": (
+        "education", "academic background", "academic qualifications", "academic credentials",
+        "qualifications", "academic history",
     ),
-    "skills": re.compile(
-        r"(?:^|\n)(?:\s*(?:technical\s+skills|core\s+competencies|skills\s*(?:&|and)\s*technologies|skills|technologies))\b",
-        re.IGNORECASE,
+    "skills": (
+        "technical skills", "core competencies", "skills & technologies", "skills and technologies",
+        "skills", "technologies",
     ),
-    "projects": re.compile(
-        r"(?:^|\n)(?:\s*(?:projects|personal\s+projects|key\s+projects|academic\s+projects))\b",
-        re.IGNORECASE,
+    "projects": ("projects", "personal projects", "key projects", "academic projects"),
+    "certifications": (
+        "certifications", "certificates", "licenses", "courses & certifications",
+        "courses and certifications",
     ),
-    "certifications": re.compile(
-        r"(?:^|\n)(?:\s*(?:certifications|licenses|courses\s*(?:&|and)\s*certifications))\b",
-        re.IGNORECASE,
-    ),
-    "summary": re.compile(
-        r"(?:^|\n)(?:\s*(?:professional\s+summary|summary|profile|about\s+me|career\s+objective|objective))\b",
-        re.IGNORECASE,
+    "summary": (
+        "professional summary", "summary", "profile", "about me", "career objective", "objective",
     ),
 }
+
+
+def _heading_pattern(headings: Tuple[str, ...]) -> re.Pattern[str]:
+    alternatives = "|".join(re.escape(heading) for heading in sorted(headings, key=len, reverse=True))
+    return re.compile(
+        rf"(?im)^[ \t]*(?:[-*#|]+\s*)?(?:{alternatives})[ \t]*:?[ \t]*$"
+    )
+
+
+SECTION_PATTERNS = {
+    section: _heading_pattern(headings)
+    for section, headings in SECTION_HEADINGS.items()
+}
+
+METRIC_PATTERN = re.compile(
+    r"(?:\b\d+(?:\.\d+)?\s*%|\$\s*\d+(?:,\d{3})*(?:\.\d+)?(?:[kmb]\b)?|"
+    r"\b\d+(?:,\d{3})*(?:\.\d+)?\s*(?:k|m|million|billion|users?|customers?|requests?|"
+    r"transactions?|percent|hours?|days?|weeks?|months?|years?|teams?|features?|employees?)\b)",
+    re.IGNORECASE,
+)
 
 # Strong action verbs signaling hands-on practical experience
 ACTION_VERBS = {
@@ -66,18 +86,19 @@ STOPWORDS = {
 }
 
 
-def segment_sections(text: str) -> Dict[str, str]:
+def segment_sections(text: str, preserve_case: bool = False) -> Dict[str, str]:
     """
     Identifies and segments resume or job description into logical sections.
     """
-    normalized = normalize_text(text)
-    positions: List[Tuple[int, str]] = []
+    extracted = normalize_resume_text(text)
+    normalized = extracted if preserve_case else normalize_text(extracted)
+    positions: List[Tuple[int, int, str]] = []
 
     for sec_name, pattern in SECTION_PATTERNS.items():
         for m in pattern.finditer(normalized):
-            positions.append((m.start(), sec_name))
+            positions.append((m.start(), m.end(), sec_name))
 
-    positions.sort(key=lambda x: x[0])
+    positions.sort(key=lambda item: item[0])
 
     sections: Dict[str, str] = {}
     if not positions:
@@ -89,17 +110,131 @@ def segment_sections(text: str) -> Dict[str, str]:
     if positions[0][0] > 0:
         sections["header"] = normalized[:positions[0][0]].strip()
 
-    for i in range(len(positions)):
-        start_idx = positions[i][0]
-        sec_name = positions[i][1]
-        end_idx = positions[i + 1][0] if i + 1 < len(positions) else len(normalized)
-        section_content = normalized[start_idx:end_idx].strip()
-        sections[sec_name] = section_content
+    for index, (_, heading_end, section_name) in enumerate(positions):
+        body_end = positions[index + 1][0] if index + 1 < len(positions) else len(normalized)
+        section_content = normalized[heading_end:body_end].strip()
+        if section_name in sections and section_content:
+            sections[section_name] = f"{sections[section_name]}\n{section_content}".strip()
+        else:
+            sections[section_name] = section_content
 
     return sections
 
 
-def extract_job_requirements(job_text: str) -> Dict[str, Any]:
+_EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
+_URL_RE = re.compile(r"(?:https?://|www\.|linkedin\.com|github\.com)", re.IGNORECASE)
+_PHONE_RE = re.compile(
+    r"(?<!\w)(?:\+\d{1,3}[\s.-]?)?(?:\(?\d{3}\)?[\s.-]?)\d{3}[\s.-]?\d{4}(?!\w)"
+)
+_ADDRESS_RE = re.compile(
+    r"^\s*(?:[-*]\s*)?\d{1,6}\s+[\w .'-]+\b"
+    r"(?:street|st|avenue|ave|road|rd|boulevard|blvd|lane|ln|drive|dr|court|ct|suite|apt|unit|postal|zip)\b",
+    re.IGNORECASE,
+)
+_CONTACT_LABEL_RE = re.compile(
+    r"^\s*(?:[-*]\s*)?(?:e-?mail|phone|mobile|telephone|location|address|contact|"
+    r"linkedin|github|portfolio|website|url)\b",
+    re.IGNORECASE,
+)
+_DATE_ONLY_RE = re.compile(
+    r"^\s*(?:[-*]\s*)?[\w .,/()&-]{0,80}\b(?:19|20)\d{2}\s*(?:-|–|to|present|current)\s*(?:(?:19|20)\d{2}|present|current)?\s*$",
+    re.IGNORECASE,
+)
+_ROLE_TITLE_RE = re.compile(
+    r"^\s*(?:(?:senior|junior|lead|staff|principal|associate)\s+)?"
+    r"(?:(?:software|data|full[- ]stack|frontend|front[- ]end|backend|back[- ]end|"
+    r"product|devops|project|program|engineering|business|systems|security)\s+)?"
+    r"(?:engineer|developer|analyst|manager|director|consultant|administrator|architect|designer)\b",
+    re.IGNORECASE,
+)
+_BULLET_PREFIX_RE = re.compile(r"^\s*(?:[-*•–—]|\d+[.)])\s*")
+_WEAK_ACHIEVEMENT_START_RE = re.compile(
+    r"^(?:worked\s+on|working\s+on|assisted\s+(?:with|in)|helped\s+(?:with|to)|"
+    r"supported|responsible\s+for|was\s+responsible\s+for|duties\s+included|"
+    r"handled|involved\s+in|participated\s+in|contributed\s+to|tasked\s+with|assigned\s+to)\b",
+    re.IGNORECASE,
+)
+
+
+def is_contact_or_heading(text: str) -> bool:
+    stripped = text.strip()
+    if not stripped:
+        return True
+    if (
+        _EMAIL_RE.search(stripped)
+        or _URL_RE.search(stripped)
+        or _PHONE_RE.search(stripped)
+        or _ADDRESS_RE.search(stripped)
+    ):
+        return True
+    if _CONTACT_LABEL_RE.search(stripped):
+        return True
+    normalized = normalize_text(stripped)
+    return any(pattern.fullmatch(normalized) for pattern in SECTION_PATTERNS.values())
+
+
+def extract_achievement_bullets(sections: Dict[str, str]) -> List[str]:
+    """Return original experience/project statements, excluding contact and heading lines."""
+    candidates: List[str] = []
+    for section_name in ("experience", "projects"):
+        last_candidate_index: Optional[int] = None
+        for line in sections.get(section_name, "").splitlines():
+            is_table_row = " | " in line
+            for segment in re.split(r"\s+\|\s+", line):
+                original_line = segment.strip()
+                if (
+                    is_contact_or_heading(original_line)
+                    or _DATE_ONLY_RE.fullmatch(original_line)
+                    or _ROLE_TITLE_RE.match(original_line)
+                ):
+                    last_candidate_index = None
+                    continue
+                clean_line = _BULLET_PREFIX_RE.sub("", original_line).strip()
+                words = clean_line.split()
+                if len(words) < 4:
+                    continue
+
+                is_bulleted = bool(_BULLET_PREFIX_RE.match(original_line))
+                first_word = re.sub(r"^[^\w]+|[^\w]+$", "", words[0].lower())
+                is_achievement_statement = (
+                    first_word in ACTION_VERBS
+                    or bool(_WEAK_ACHIEVEMENT_START_RE.match(clean_line))
+                )
+                if is_bulleted or is_achievement_statement:
+                    candidates.append(original_line)
+                    last_candidate_index = len(candidates) - 1
+                elif not is_table_row and last_candidate_index is not None and len(words) >= 3:
+                    candidates[last_candidate_index] = (
+                        f"{candidates[last_candidate_index]} {original_line}"
+                    )
+
+    seen: Set[str] = set()
+    deduped: List[str] = []
+    for bullet in candidates:
+        if bullet.casefold() not in seen:
+            seen.add(bullet.casefold())
+            deduped.append(bullet)
+    return deduped
+
+
+def count_experience_entries(sections: Dict[str, str]) -> int:
+    """Count role or date heading lines without double-counting paired headings."""
+    lines = [line.strip() for line in sections.get("experience", "").splitlines() if line.strip()]
+    role_lines = [
+        line for line in lines
+        if _ROLE_TITLE_RE.match(_BULLET_PREFIX_RE.sub("", line))
+    ]
+    if role_lines:
+        return len(role_lines)
+    return sum(bool(_DATE_ONLY_RE.match(line)) for line in lines)
+
+
+def extract_job_requirements(
+    job_text: str,
+    progress_callback: Callable[
+        [str, str, ProgressStatus, Dict[str, Any]], None
+    ] | None = None,
+) -> Dict[str, Any]:
     """
     Parses a job description to extract:
     - Mandatory / Required requirements
@@ -108,6 +243,13 @@ def extract_job_requirements(job_text: str) -> Dict[str, Any]:
     - Experience years required
     - Education degrees required
     """
+    if progress_callback:
+        progress_callback(
+            "keyword_matching",
+            "job_keyword_extraction",
+            "in_progress",
+            {},
+        )
     norm_job = normalize_text(job_text)
     lines = [line.strip() for line in norm_job.split("\n") if line.strip()]
 
@@ -190,7 +332,7 @@ def extract_job_requirements(job_text: str) -> Dict[str, Any]:
         if wl not in STOPWORDS and len(wl) > 2 and not wl.isdigit():
             filtered_keywords.add(wl)
 
-    return {
+    result = {
         "mandatory_requirements": mandatory_reqs[:20],
         "preferred_requirements": preferred_reqs[:15],
         "job_skills": sorted(list(job_skills)),
@@ -198,9 +340,26 @@ def extract_job_requirements(job_text: str) -> Dict[str, Any]:
         "required_degrees": sorted(list(required_degrees)),
         "job_keywords": filtered_keywords,
     }
+    if progress_callback:
+        progress_callback(
+            "keyword_matching",
+            "job_keyword_extraction",
+            "completed",
+            {
+                "job_keywords": sorted(filtered_keywords),
+                "job_requirement_count": len(mandatory_reqs[:20])
+                + len(preferred_reqs[:15]),
+            },
+        )
+    return result
 
 
-def parse_resume_content(resume_text: str) -> Dict[str, Any]:
+def parse_resume_content(
+    resume_text: str,
+    progress_callback: Callable[
+        [str, str, ProgressStatus, Dict[str, Any]], None
+    ] | None = None,
+) -> Dict[str, Any]:
     """
     Parses resume text to extract:
     - Detected sections
@@ -210,20 +369,121 @@ def parse_resume_content(resume_text: str) -> Dict[str, Any]:
     - Skills identified
     - Word and formatting metrics
     """
+    if progress_callback:
+        for section_name in (
+            "summary",
+            "experience",
+            "education",
+            "skills",
+            "projects",
+            "certifications",
+        ):
+            progress_callback(
+                "section_detection",
+                f"{section_name}_section",
+                "in_progress",
+                {},
+            )
+
     norm_resume = normalize_text(resume_text)
     sections = segment_sections(norm_resume)
+    original_sections = segment_sections(resume_text, preserve_case=True)
 
-    # 1. Action verbs count
+    if progress_callback:
+        for section_name in (
+            "summary",
+            "experience",
+            "education",
+            "skills",
+            "projects",
+            "certifications",
+        ):
+            section_text = sections.get(section_name, "")
+            progress_callback(
+                "section_detection",
+                f"{section_name}_section",
+                "completed",
+                {
+                    "section_found": bool(section_text.strip()),
+                    "word_count": len(section_text.split()),
+                },
+            )
+
+        progress_callback(
+            "experience_impact",
+            "experience_extraction",
+            "in_progress",
+            {},
+        )
+        progress_callback(
+            "experience_impact",
+            "achievement_bullets",
+            "in_progress",
+            {},
+        )
+    achievement_bullets = extract_achievement_bullets(original_sections)
+    experience_entries_count = count_experience_entries(original_sections)
+    if progress_callback:
+        progress_callback(
+            "experience_impact",
+            "experience_extraction",
+            "completed",
+            {"experience_entries_count": experience_entries_count},
+        )
+        progress_callback(
+            "experience_impact",
+            "achievement_bullets",
+            "completed",
+            {"achievement_bullets_count": len(achievement_bullets)},
+        )
+
+    # 1. Action verbs count only when they appear in extracted experience/project statements.
+    if progress_callback:
+        progress_callback(
+            "experience_impact",
+            "action_verb_analysis",
+            "in_progress",
+            {},
+        )
     tokens = re.findall(r"\b[a-z]+\b", norm_resume)
     unique_tokens = set(tokens)
-    action_verbs_found = unique_tokens.intersection(ACTION_VERBS)
+    achievement_tokens = re.findall(
+        r"\b[a-z]+\b", "\n".join(achievement_bullets).lower()
+    )
+    action_verbs_found = set(achievement_tokens).intersection(ACTION_VERBS)
+    if progress_callback:
+        progress_callback(
+            "experience_impact",
+            "action_verb_analysis",
+            "completed",
+            {
+                "action_verbs": sorted(action_verbs_found),
+                "action_verb_count": len(action_verbs_found),
+            },
+        )
 
     # 2. Metrics and quantified results (percentages, currencies, counts, scaling metrics)
-    metrics_matches = re.findall(
-        r"(?:\b\d+(?:\.\d+)?%|\$\s*\d+(?:,\d+)*(?:\.\d+)?[kmb]?|\b\d+\s*(?:k|million|billion|users|customers|requests|transactions|percent)\b)",
-        norm_resume,
-        re.IGNORECASE,
+    if progress_callback:
+        progress_callback(
+            "experience_impact",
+            "quantified_achievements",
+            "in_progress",
+            {},
+        )
+    metrics_matches = [
+        match.group(0)
+        for match in METRIC_PATTERN.finditer("\n".join(achievement_bullets))
+    ]
+    quantified_achievements_count = sum(
+        bool(METRIC_PATTERN.search(bullet)) for bullet in achievement_bullets
     )
+    if progress_callback:
+        progress_callback(
+            "experience_impact",
+            "quantified_achievements",
+            "completed",
+            {"quantified_achievements_count": quantified_achievements_count},
+        )
 
     # 3. Resume years of experience evidence
     exp_year_matches = re.findall(
@@ -239,18 +499,32 @@ def parse_resume_content(resume_text: str) -> Dict[str, Any]:
             degrees_found.add(level)
 
     # 5. Skills identified in resume
+    if progress_callback:
+        progress_callback(
+            "keyword_matching",
+            "skills_extraction",
+            "in_progress",
+            {},
+        )
     skills_found: Set[str] = set()
     for canonical in DEFAULT_SYNONYM_MAP.keys():
         matched, _ = find_term_in_text(canonical, norm_resume)
         if matched:
             skills_found.add(canonical)
+    if progress_callback:
+        progress_callback(
+            "keyword_matching",
+            "skills_extraction",
+            "completed",
+            {"skills_identified": sorted(skills_found)},
+        )
 
     # 6. Structural metrics
-    has_experience_sec = "experience" in sections
-    has_education_sec = "education" in sections
-    has_skills_sec = "skills" in sections
+    has_experience_sec = bool(sections.get("experience"))
+    has_education_sec = bool(sections.get("education"))
+    has_skills_sec = bool(sections.get("skills"))
     word_count = len(tokens)
-    bullet_count = len(re.findall(r"(?:^|\n)\s*-\s+", norm_resume))
+    bullet_count = len(achievement_bullets)
 
     return {
         "sections": sections,
@@ -264,5 +538,8 @@ def parse_resume_content(resume_text: str) -> Dict[str, Any]:
         "has_skills_section": has_skills_sec,
         "word_count": word_count,
         "bullet_count": bullet_count,
+        "experience_entries_count": experience_entries_count,
+        "quantified_achievements_count": quantified_achievements_count,
+        "achievement_bullets": achievement_bullets,
         "raw_tokens": unique_tokens,
     }

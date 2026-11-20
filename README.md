@@ -2,7 +2,11 @@
 
 A production-oriented, explainable **Resume ATS Score Checker** with a responsive web dashboard, native Android application, and deterministic Python/FastAPI analysis engine.
 
-Initial budget: ₹0. Built exclusively with free, open-source technologies, local processing, and zero paid AI API dependencies.
+Built with open-source technologies and local processing for standard analysis. AI resume writing is optional and requires a backend-configured OpenAI API key; associated provider charges and data terms depend on the operator's account.
+
+The anonymous ATS analysis remains deterministic and ephemeral. Resume Studio can call the configured AI provider only after a user asks for a generated suggestion. The opt-in Career Platform adds authenticated, encrypted-at-rest storage for resume profiles and versions; configure `JOB_DATA_ENCRYPTION_KEY` before saving cloud data. Local browser storage remains available.
+
+See [Career Platform setup and limitations](docs/CAREER_PLATFORM.md) for provider permissions, environment variables, API routes, and deployment notes.
 
 ---
 
@@ -14,10 +18,11 @@ resume-ats-checker/
 ├── android/              # Native Android App (Kotlin, Jetpack Compose - Milestone 3)
 ├── backend/              # Analysis Engine & REST API (FastAPI, Python 3.13)
 │   ├── app/
-│   │   ├── api/v1/       # REST Endpoints (/health, /analyze)
+│   │   ├── api/v1/       # REST Endpoints (/health, /analyze, /career)
 │   │   ├── core/         # Security, errors, and privacy logging
 │   │   ├── models/       # Pydantic schemas and response contracts
-│   │   └── services/     # Extractor, parser, scoring, synonyms, recommendations
+│   │   ├── services/     # Analysis, providers, matching, auth, and career persistence
+│   │   └── db/           # Additive SQLite migrations and connection management
 │   ├── requirements.txt
 │   └── requirements-dev.txt
 ├── tests/                # Automated Test Suite (Pytest)
@@ -218,5 +223,17 @@ curl -X POST http://127.0.0.1:8000/api/v1/analyze \
 ## 8. Current Implementation Status
 
 - [x] **Milestone 1**: Complete backend foundation, text extractor, synonym service, 5-category scoring engine, grounded recommendation engine, REST API, test fixtures, and automated test suite (32 tests passing).
-- [ ] **Milestone 2**: React + TypeScript + Vite responsive web frontend.
+- [x] **Milestone 2**: React + TypeScript + Vite web app, ATS analysis, targeted resume builder, PDF/DOCX export, browser-local version history, version comparison, and resume quality report.
 - [ ] **Milestone 3**: Native Android application (Kotlin + Jetpack Compose).
+
+### Resume intelligence capabilities
+
+- Job-description matching, keyword gaps, missing/weakly evidenced skills, prioritized recommendations, and the five-category ATS match estimate.
+- Section-by-section completeness review, extracted-text formatting checks, common grammar-pattern flags, approximate readability estimate, achievement-impact signals, ATS compatibility checks, and final QA checklist.
+- A resume-derived professional-summary draft, experience bullet rewrites, achievement guidance, and categorized action-verb suggestions. Review every suggestion; do not add unverified facts, skills, or metrics.
+- Targeted resume versions can be named, restored, compared by section, and exported as PDF or DOCX. Version snapshots are browser-local and are not synchronized between devices.
+- Resume Studio provides from-scratch forms, 60 ATS-safe single-column style-and-accent combinations, industry and career-path starter structures, local job tailoring, multiple browser-local profiles, custom sections, and editable cover letter, LinkedIn, and portfolio text drafts.
+- International presentation presets support US/Canada, UK, general EU, India, and English-language Japan date conventions. These are formatting aids, not legal or country-specific hiring advice.
+
+Scores and writing checks are transparent heuristics, not employer ATS predictions, professional proofreading, or a hiring guarantee. Text extraction cannot verify visual layout such as columns, tables, or graphics.
+Writing drafts are deterministic and do not use a generative AI model. Full resume translation is not available in local-only mode because no translation model is configured; the app does not claim that a phrasebook is a complete translation.

@@ -1,25 +1,172 @@
 import io
+import hashlib
 import json
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
-from fastapi import APIRouter, UploadFile, File, Form, Body, HTTPException, Response, status
+from fastapi import APIRouter, UploadFile, File, Form, Body, HTTPException, Response, status, Depends
 from fastapi.responses import StreamingResponse
 
 from app.core.errors import EmptyJobDescriptionError, EmptyDocumentError
+from app.core.security import read_upload_file
 from app.models.builder_schemas import (
     TargetMode,
     TargetedAnalysisRequest,
     TargetedAnalysisResponse,
     ExportResumeRequest,
     StructuredResume,
+    ResumeAIRequest,
+    ResumeAIResponse,
+    ResumeDocumentInput,
+    ResumeDocumentOutput,
 )
+from app.db.database import database, utc_now
+from app.services.data_protection import protect_text, reveal_text
+from app.services.job_auth import current_user
+from app.services.business_billing import run_charged_ai_operation
+from app.services.resume_ai import generate_resume_content
 from app.services.extractor import extract_resume_text
 from app.services.builder_service import (
     analyze_targeted_resume,
     generate_docx_resume,
     generate_pdf_resume,
+    RESUME_TEMPLATE_PALETTES,
 )
 
 router = APIRouter()
+
+
+def _enforce_resume_ai_rate_limit(user_id: str) -> None:
+    operation = "resume_ai"
+    limit = 5
+    window_seconds = 900
+    rate_key = hashlib.sha256(f"resume-ai:{user_id}".encode("utf-8")).hexdigest()
+    now = datetime.now(timezone.utc)
+    with database(immediate=True) as connection:
+        row = connection.execute(
+            "SELECT window_started_at, attempts FROM auth_rate_limits WHERE rate_key=? AND operation=?",
+            (rate_key, operation),
+        ).fetchone()
+        if row:
+            try:
+                window_started = datetime.fromisoformat(row["window_started_at"])
+            except ValueError:
+                window_started = now - timedelta(seconds=window_seconds + 1)
+            if (now - window_started).total_seconds() < window_seconds:
+                if row["attempts"] >= limit:
+                    raise HTTPException(
+                        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                        detail="Too many resume AI requests. Try again after the rate limit window.",
+                        headers={"Retry-After": str(window_seconds)},
+                    )
+                connection.execute(
+                    "UPDATE auth_rate_limits SET attempts=attempts+1 WHERE rate_key=? AND operation=?",
+                    (rate_key, operation),
+                )
+                return
+        connection.execute(
+            "INSERT INTO auth_rate_limits(rate_key, operation, window_started_at, attempts) "
+            "VALUES (?, ?, ?, 1) ON CONFLICT(rate_key, operation) DO UPDATE SET "
+            "window_started_at=excluded.window_started_at, attempts=1",
+            (rate_key, operation, now.isoformat()),
+        )
+
+
+@router.post("/ai", response_model=ResumeAIResponse, summary="Generate grounded resume writing suggestions")
+async def resume_ai_endpoint(
+    payload: ResumeAIRequest,
+    user: dict = Depends(current_user),
+) -> ResumeAIResponse:
+    _enforce_resume_ai_rate_limit(user["id"])
+    return await run_charged_ai_operation(
+        user["id"],
+        "resume_writing",
+        lambda: generate_resume_content(payload),
+    )
+
+
+@router.get("/resumes", response_model=List[ResumeDocumentOutput], summary="List saved resume documents")
+async def list_resume_documents(
+    document_type: str,
+    user: dict = Depends(current_user),
+) -> List[ResumeDocumentOutput]:
+    if document_type not in {"profile", "version"}:
+        raise HTTPException(status_code=400, detail="Document type must be 'profile' or 'version'.")
+    with database() as connection:
+        rows = connection.execute(
+            "SELECT id, document_type, name, document_json, created_at, updated_at "
+            "FROM resume_builder_documents WHERE user_id=? AND document_type=? ORDER BY updated_at DESC",
+            (user["id"], document_type),
+        ).fetchall()
+    documents = []
+    for row in rows:
+        try:
+            document = json.loads(reveal_text(row["document_json"]))
+            if not isinstance(document, dict):
+                raise ValueError("Stored resume document is not a JSON object")
+            documents.append(ResumeDocumentOutput(
+                id=row["id"],
+                document_type=row["document_type"],
+                name=reveal_text(row["name"]),
+                document=document,
+                created_at=row["created_at"],
+                updated_at=row["updated_at"],
+            ))
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            raise HTTPException(status_code=500, detail="A saved resume document could not be read.") from exc
+    return documents
+
+
+@router.put("/resumes/{document_id}", response_model=ResumeDocumentOutput, summary="Save a resume document")
+async def save_resume_document(
+    document_id: str,
+    payload: ResumeDocumentInput,
+    user: dict = Depends(current_user),
+) -> ResumeDocumentOutput:
+    if document_id != payload.id:
+        raise HTTPException(status_code=400, detail="Resume document ID does not match the request.")
+    now = utc_now()
+    encoded_document = json.dumps(payload.document, ensure_ascii=False, separators=(",", ":"))
+    with database(immediate=True) as connection:
+        existing = connection.execute(
+            "SELECT created_at, user_id FROM resume_builder_documents WHERE id=?",
+            (document_id,),
+        ).fetchone()
+        if existing and existing["user_id"] != user["id"]:
+            raise HTTPException(status_code=404, detail="Resume document was not found.")
+        created_at = existing["created_at"] if existing else now
+        if existing:
+            connection.execute(
+                "UPDATE resume_builder_documents SET document_type=?, name=?, document_json=?, updated_at=? "
+                "WHERE id=? AND user_id=?",
+                (
+                    payload.document_type, protect_text(payload.name), protect_text(encoded_document),
+                    now, document_id, user["id"],
+                ),
+            )
+        else:
+            connection.execute(
+                "INSERT INTO resume_builder_documents "
+                "(id, user_id, document_type, name, document_json, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    document_id, user["id"], payload.document_type, protect_text(payload.name),
+                    protect_text(encoded_document), created_at, now,
+                ),
+            )
+    return ResumeDocumentOutput(
+        id=document_id, document_type=payload.document_type, name=payload.name,
+        document=payload.document, created_at=created_at, updated_at=now,
+    )
+
+
+@router.delete("/resumes/{document_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Delete a saved resume document")
+async def delete_resume_document(document_id: str, user: dict = Depends(current_user)) -> Response:
+    with database(immediate=True) as connection:
+        connection.execute(
+            "DELETE FROM resume_builder_documents WHERE id=? AND user_id=?",
+            (document_id, user["id"]),
+        )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post(
@@ -42,7 +189,7 @@ async def analyze_and_plan_endpoint(
     # 1. Resolve Resume Text
     clean_text = ""
     if resume_file is not None:
-        content = await resume_file.read()
+        content = await read_upload_file(resume_file)
         extracted_text, _, _ = extract_resume_text(
             filename=resume_file.filename or "resume",
             content=content,
@@ -122,9 +269,37 @@ async def export_resume_endpoint(
 ) -> Response:
     format_clean = payload.format.lower().strip()
     safe_name = "".join(c for c in (payload.filename or "targeted_resume") if c.isalnum() or c in ("-", "_")) or "targeted_resume"
+    template_parts = payload.template_id.split("-")
+    valid_families = {
+        "essential", "modern", "qa", "professional", "academic", "technical",
+        "creative", "healthcare", "finance", "marketing", "sales", "hr",
+        "operations", "executive",
+    }
+    if (
+        len(template_parts) != 3
+        or template_parts[0] != "ats"
+        or template_parts[1] not in valid_families
+        or template_parts[2] not in RESUME_TEMPLATE_PALETTES
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unknown resume template. Choose a template from the ATS template catalog.",
+        )
+    if payload.international_format not in {"us", "uk", "eu", "india", "japan"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unsupported international format.",
+        )
 
     if format_clean == "docx":
-        docx_bytes = generate_docx_resume(payload.resume)
+        docx_bytes = generate_docx_resume(
+            payload.resume,
+            template_id=payload.template_id,
+            international_format=payload.international_format,
+            font_family=payload.font_family,
+            section_order=payload.section_order,
+            hidden_sections=payload.hidden_sections,
+        )
         return Response(
             content=docx_bytes,
             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -134,7 +309,14 @@ async def export_resume_endpoint(
             },
         )
     elif format_clean == "pdf":
-        pdf_bytes = generate_pdf_resume(payload.resume)
+        pdf_bytes = generate_pdf_resume(
+            payload.resume,
+            template_id=payload.template_id,
+            international_format=payload.international_format,
+            font_family=payload.font_family,
+            section_order=payload.section_order,
+            hidden_sections=payload.hidden_sections,
+        )
         return Response(
             content=pdf_bytes,
             media_type="application/pdf",

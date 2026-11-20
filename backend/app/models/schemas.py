@@ -65,6 +65,43 @@ class DocumentMetadata(BaseModel):
     extraction_warnings: List[str] = Field(default_factory=list, description="Parser warnings (e.g., scanned PDF/OCR hint)")
 
 
+class QualityCheck(BaseModel):
+    """A transparent, heuristic quality-assurance observation."""
+    title: str
+    status: str
+    detail: str
+
+
+class SectionQuality(BaseModel):
+    """Content and completeness signals for one standard resume section."""
+    name: str
+    found: bool
+    word_count: int
+    findings: List[str] = Field(default_factory=list)
+
+
+class GrammarIssue(BaseModel):
+    """A possible writing issue detected by local pattern checks."""
+    category: str
+    excerpt: str
+    suggestion: str
+
+
+class ResumeQualityReport(BaseModel):
+    """Explainable resume-quality checks based on extracted text."""
+    section_analysis: List[SectionQuality]
+    formatting_findings: List[str]
+    grammar_issues: List[GrammarIssue]
+    readability_score: float
+    readability_label: str
+    readability_explanation: str
+    impact_score: float
+    impact_explanation: str
+    ats_compatibility_checks: List[QualityCheck]
+    quality_assurance_checks: List[QualityCheck]
+    professional_summary_draft: str
+
+
 # =============================================================================
 # Resume Improvement Assistant Schemas
 # =============================================================================
@@ -83,7 +120,7 @@ class BulletImprovement(BaseModel):
     issue: str = Field(..., description="Explanation of why this bullet point could be improved")
     suggested_rewrite: str = Field(
         ...,
-        description="Stronger rewritten version following Action + Task + Method + [Measurable Result Placeholder]",
+        description="Source-preserving wording with an explicit placeholder for any missing verified result",
     )
     what_to_add: str = Field(..., description="Specific verified information or metric the candidate should add")
     action_verb: Optional[str] = Field(default=None, description="Recommended active verb for this bullet")
@@ -169,7 +206,10 @@ class BulletImprovementResponse(BaseModel):
     original_text: str = Field(..., description="Original input text")
     is_weak: bool = Field(..., description="Whether the bullet point is weak or vague")
     issues: List[str] = Field(default_factory=list, description="Identified issues with the bullet point")
-    suggested_rewrite: str = Field(..., description="Suggested rewrite following Action + Task + Method + [Metric]")
+    suggested_rewrite: str = Field(
+        ...,
+        description="Source-preserving suggested wording or a clear notice when the input is not an achievement",
+    )
     what_to_add: str = Field(..., description="What specific information the user should add")
     recommended_action_verbs: List[str] = Field(default_factory=list, description="Recommended strong action verbs")
 
@@ -186,6 +226,10 @@ class AnalysisResponse(BaseModel):
     keywords_found: List[str] = Field(default_factory=list, description="Unique relevant keywords extracted from resume")
     recommendations: List[Recommendation] = Field(..., description="Targeted actionable suggestions for the candidate")
     document_metadata: DocumentMetadata = Field(..., description="Information on parsed resume document")
+    quality_report: Optional[ResumeQualityReport] = Field(
+        default=None,
+        description="Local, heuristic section, writing, readability, impact, formatting, and ATS checks",
+    )
     improvement_assistant: Optional[ResumeImprovementAssistant] = Field(
         default=None,
         description="Personalized resume improvement suggestions, bullet rewrites, and skill alignment",

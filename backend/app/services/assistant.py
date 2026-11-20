@@ -15,7 +15,7 @@ from app.models.schemas import (
     MissingRequirement,
 )
 from app.services.synonyms import DEFAULT_SYNONYM_MAP, find_term_in_text, normalize_text
-from app.services.parser import ACTION_VERBS
+from app.services.parser import ACTION_VERBS, extract_achievement_bullets
 
 # Weak / passive starter patterns with specific issues and replacement verbs
 WEAK_STARTER_RULES: List[Tuple[re.Pattern, str, str, str]] = [
@@ -149,53 +149,11 @@ METRIC_GUIDANCE_ITEMS: List[MetricGuidanceItem] = [
 ]
 
 
-def extract_candidate_bullets(resume_text: str, sections: Dict[str, str]) -> List[str]:
+def extract_candidate_bullets(sections: Dict[str, str]) -> List[str]:
     """
-    Extracts individual bullet points and accomplishment statements from resume content.
-    Prioritizes experience and projects sections, but falls back to full text bullets.
+    Extract only experience/project achievement statements, keeping their original wording.
     """
-    candidates: List[str] = []
-
-    # Priority target sections
-    target_texts = []
-    if "experience" in sections:
-        target_texts.append(sections["experience"])
-    if "projects" in sections:
-        target_texts.append(sections["projects"])
-    if not target_texts:
-        target_texts.append(resume_text)
-
-    for section_text in target_texts:
-        lines = section_text.split("\n")
-        for line in lines:
-            trimmed = line.strip()
-            # Match standard bullet indicators or clean narrative lines
-            is_bullet_marker = bool(re.match(r"^[-*•–—\u2022\u25cf\d.)]+\s+", trimmed))
-            clean_line = re.sub(r"^[-*•–—\u2022\u25cf\d.)]+\s*", "", trimmed).strip()
-
-            # Skip section headers, contact lines, or trivial words
-            if len(clean_line) < 20 or len(clean_line.split()) < 4:
-                continue
-            if any(h in clean_line.lower() for h in ["experience", "education", "skills", "summary", "projects", "certifications"]):
-                continue
-            # Skip pure job titles or dates e.g. "Software Engineer (2020 - 2022)"
-            if re.search(r"^(?:senior|junior|lead|staff)?\s*(?:software|data|full-stack|frontend|backend|product|devops)?\s*engineer\s*[-–]\s*", clean_line, re.IGNORECASE):
-                continue
-            if re.search(r"\b(?:present|current|20\d\d)\b", clean_line, re.IGNORECASE) and len(clean_line.split()) < 7:
-                continue
-
-            if is_bullet_marker or len(clean_line.split()) >= 6:
-                candidates.append(clean_line)
-
-    # Deduplicate while preserving order
-    seen = set()
-    deduped = []
-    for c in candidates:
-        if c.lower() not in seen:
-            seen.add(c.lower())
-            deduped.append(c)
-
-    return deduped
+    return extract_achievement_bullets(sections)
 
 
 def analyze_bullet_point(
@@ -210,26 +168,27 @@ def analyze_bullet_point(
     clean_text = bullet_text.strip()
     # Strip any leading bullet markers
     clean_text = re.sub(r"^[-*•–—\u2022\u25cf\d.)]+\s*", "", clean_text).strip()
-    if clean_text.endswith("."):
-        clean_text_no_dot = clean_text[:-1]
-    else:
-        clean_text_no_dot = clean_text
+    if not extract_achievement_bullets({"experience": clean_text}):
+        issues = ["This text is not a recognizable experience or project achievement statement."]
+        return (
+            True,
+            issues,
+            "No achievement rewrite generated. Provide an experience or project achievement statement.",
+            "Contact details, headings, role titles, and dates are not rewritten as achievements.",
+            None,
+            [],
+        )
 
     issues: List[str] = []
     weak_starter_matched = False
     chosen_verb: Optional[str] = None
 
     # 1. Check for weak/passive opener
-    for pattern, explanation, verb_lead, alt_verb in WEAK_STARTER_RULES:
+    for pattern, explanation, _, _ in WEAK_STARTER_RULES:
         m = pattern.search(clean_text)
         if m:
             weak_starter_matched = True
             issues.append(explanation)
-            # Remove weak opener to isolate task
-            clean_text_no_dot = clean_text_no_dot[m.end():].strip()
-            # If remaining starts with 'with', 'in', 'on', 'of', trim it
-            clean_text_no_dot = re.sub(r"^(?:with|in|on|of|for|to)\s+", "", clean_text_no_dot, flags=re.IGNORECASE).strip()
-            chosen_verb = verb_lead
             break
 
     # 2. Check for metrics / quantified outcomes
@@ -247,7 +206,7 @@ def analyze_bullet_point(
     detected_skills: List[str] = []
     clean_lower = clean_text.lower()
     for canonical in DEFAULT_SYNONYM_MAP.keys():
-        matched, matched_term = find_term_in_text(canonical, clean_lower)
+        matched, _ = find_term_in_text(canonical, clean_lower)
         if matched:
             detected_skills.append(canonical)
 
@@ -261,89 +220,23 @@ def analyze_bullet_point(
 
     is_weak = len(issues) > 0
 
-    # Determine recommended action verb
+    # Report an action verb only when it is already present in the source.
     first_word = words[0].lower() if words else ""
     first_word_clean = re.sub(r"[^a-z]", "", first_word)
     if not chosen_verb:
         if first_word_clean in ACTION_VERBS:
-            # Already has an action verb
             chosen_verb = words[0].capitalize()
-        else:
-            # Suggest a decisive active verb
-            if "test" in clean_lower or "qa" in clean_lower:
-                chosen_verb = "Tested and validated"
-            elif "design" in clean_lower or "architect" in clean_lower:
-                chosen_verb = "Architected"
-            elif "data" in clean_lower or "sql" in clean_lower or "query" in clean_lower:
-                chosen_verb = "Analyzed and optimized"
-            elif "deploy" in clean_lower or "docker" in clean_lower or "cloud" in clean_lower:
-                chosen_verb = "Automated and deployed"
-            elif "lead" in clean_lower or "team" in clean_lower:
-                chosen_verb = "Spearheaded"
-            else:
-                chosen_verb = "Engineered"
 
-    # Construct stronger rewritten version: Action + Task + Method + [Measurable Result]
-    # Keep task context from cleaned text
-    task_phrase = clean_text_no_dot
-
-    # If first word was already an action verb, keep subsequent task
-    if not weak_starter_matched and first_word_clean in ACTION_VERBS and len(words) > 1:
-        task_phrase = " ".join(words[1:])
-        task_phrase = re.sub(r"\.+$", "", task_phrase)
-
-    # Ensure task phrase is formatted nicely
-    if task_phrase:
-        # Lowercase initial character unless proper noun / tech name (like API, REST, SQL, Python, AWS)
-        first_task_token = task_phrase.split()[0]
-        if not (first_task_token.isupper() or first_task_token in ["Python", "Docker", "PostgreSQL", "React", "TypeScript", "FastAPI"]):
-            task_phrase = task_phrase[0].lower() + task_phrase[1:]
-
-    # Tool/Method component
-    if detected_skills:
-        skills_str = ", ".join(detected_skills[:3])
-        method_part = f"utilizing {skills_str}"
-        # If the task phrase already mentions the skill, avoid repeating
-        if any(s.lower() in task_phrase.lower() for s in detected_skills):
-            method_part = ""
-    elif target_skills:
-        relevant_targets = [s for s in target_skills[:2] if s.lower() in clean_lower]
-        if relevant_targets:
-            method_part = f"utilizing {', '.join(relevant_targets)}"
-        else:
-            method_part = "using [specify verified technology/framework]"
-    else:
-        method_part = "using [specify verified tool/method]"
-
-    # Assemble base suggestion
-    base_parts = [chosen_verb]
-    if task_phrase:
-        base_parts.append(task_phrase)
-    if method_part and method_part not in task_phrase:
-        base_parts.append(method_part)
-
-    assembled_sentence = " ".join(base_parts).strip()
-    assembled_sentence = re.sub(r"\s+", " ", assembled_sentence)
-
-    # Add measurable result placeholder if absent
     if not has_metrics:
-        suggested_rewrite = (
-            f"{assembled_sentence}, achieving [add verified result, e.g., 30% latency reduction or X users supported]."
-        )
+        suggested_rewrite = f"{clean_text} [add verified result, if applicable]"
         what_to_add = (
-            "Add the specific technology or tool used and quantify your outcome "
-            "(e.g., actual speedup %, user count, test pass rate, or hours saved). "
-            "Only include metrics you can truthfully verify."
+            "Add only your actual contribution and a measurable outcome you can verify. "
+            "Do not add tools, technologies, or results you did not use or achieve."
         )
     else:
-        # Already has metric, ensure proper punctuation
-        suggested_rewrite = (
-            f"{assembled_sentence}."
-            if not assembled_sentence.endswith(".")
-            else assembled_sentence
-        )
+        suggested_rewrite = clean_text
         what_to_add = (
-            "Verify that the methodology and tools listed match your genuine experience."
+            "Verify that every responsibility, tool, and metric in the original statement is accurate."
         )
 
     return is_weak, issues, suggested_rewrite, what_to_add, chosen_verb, detected_skills
@@ -361,9 +254,9 @@ def improve_single_bullet(
             original_text=bullet_text,
             is_weak=True,
             issues=["Input bullet point is empty."],
-            suggested_rewrite="Engineered [task] using [verified tool], resulting in [add verified result].",
-            what_to_add="Provide your actual role, task, technology, and verified metric.",
-            recommended_action_verbs=["Engineered", "Implemented", "Delivered"],
+            suggested_rewrite="No achievement rewrite generated. Provide an experience or project achievement statement.",
+            what_to_add="Only submit a statement describing work you actually performed.",
+            recommended_action_verbs=[],
         )
 
     is_weak, issues, rewrite, what_to_add, chosen_verb, _ = analyze_bullet_point(
@@ -501,7 +394,9 @@ def generate_improvement_assistant(
     # =========================================================================
     # 2. Weak or Vague Resume Bullet Points & Rewrites
     # =========================================================================
-    candidate_bullets = extract_candidate_bullets(norm_resume_text, sections)
+    candidate_bullets = parsed_resume.get("achievement_bullets")
+    if candidate_bullets is None:
+        candidate_bullets = extract_candidate_bullets(sections)
     bullet_improvements: List[BulletImprovement] = []
     bullet_counter = 1
 

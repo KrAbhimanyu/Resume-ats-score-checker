@@ -1,6 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { analyzeResume, checkHealth, improveBullet, AnalysisApiError } from '../services/analysisApi';
-import { AnalysisResponse } from '../types/analysis';
+import {
+  analyzeResume,
+  checkHealth,
+  improveBullet,
+  exportResume,
+  AnalysisApiError,
+  createAnalysisSession,
+  streamAnalysisProgress,
+} from '../services/analysisApi';
+import { AnalysisProgressEvent, AnalysisResponse, AnalysisSessionSnapshot } from '../types/analysis';
+import { StructuredResume } from '../types/builder';
 
 const mockSuccessResponse: AnalysisResponse = {
   overall_score: 84.5,
@@ -63,6 +72,122 @@ describe('analysisApi Service', () => {
     vi.restoreAllMocks();
   });
 
+  describe('analysis progress sessions', () => {
+    it('creates a resumable progress session', async () => {
+      const created = {
+        session_id: 'session-token',
+        created_at: '2026-11-20T00:00:00Z',
+        layers: [],
+      };
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+        new Response(JSON.stringify(created), { status: 201 })
+      );
+
+      await expect(createAnalysisSession()).resolves.toEqual(created);
+      expect(fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/v1/analyze/session'),
+        expect.objectContaining({ method: 'POST' })
+      );
+    });
+
+    it('replays SSE progress events and recovers the completed snapshot', async () => {
+      const event: AnalysisProgressEvent = {
+        event_id: 7,
+        layer_id: 'resume_parsing',
+        step_id: 'extract_text',
+        status: 'completed',
+        progress_percent: 100,
+        details: { file_type: '.pdf', pages_total: 2 },
+        created_at: '2026-11-20T00:00:01Z',
+      };
+      const snapshot: AnalysisSessionSnapshot = {
+        session_id: 'session-token',
+        status: 'completed',
+        created_at: '2026-11-20T00:00:00Z',
+        layers: [],
+        events: [event],
+        result: mockSuccessResponse,
+        report_available: true,
+      };
+      const fetchSpy = vi.spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(new Response(
+          `id: ${event.event_id}\nevent: progress\ndata: ${JSON.stringify(event)}\n\n`,
+          { status: 200, headers: { 'Content-Type': 'text/event-stream' } }
+        ))
+        .mockResolvedValueOnce(new Response(JSON.stringify(snapshot), { status: 200 }));
+      const onEvent = vi.fn();
+      const onSnapshot = vi.fn();
+      const onConnectionChange = vi.fn();
+
+      await streamAnalysisProgress(
+        'session-token',
+        onEvent,
+        onSnapshot,
+        onConnectionChange,
+        new AbortController().signal
+      );
+
+      expect(onEvent).toHaveBeenCalledWith(event);
+      expect(onSnapshot).toHaveBeenCalledWith(snapshot);
+      expect(onConnectionChange).toHaveBeenNthCalledWith(1, true);
+      expect(onConnectionChange).toHaveBeenLastCalledWith(false);
+      expect(fetchSpy.mock.calls[0][0]).toContain('after_id=0');
+      expect(fetchSpy.mock.calls[0][1]?.headers).toMatchObject({
+        'X-Analysis-Session-Id': 'session-token',
+      });
+    });
+
+    it('reconnects after an SSE disconnect using the last delivered event id', async () => {
+      const makeEvent = (eventId: number, status: 'in_progress' | 'completed'): AnalysisProgressEvent => ({
+        event_id: eventId,
+        layer_id: 'resume_parsing',
+        step_id: 'extract_text',
+        status,
+        progress_percent: status === 'completed' ? 100 : 25,
+        details: {},
+        created_at: '2026-11-20T00:00:01Z',
+      });
+      const firstEvent = makeEvent(3, 'in_progress');
+      const finalEvent = makeEvent(4, 'completed');
+      const runningSnapshot: AnalysisSessionSnapshot = {
+        session_id: 'session-token',
+        status: 'running',
+        created_at: '2026-11-20T00:00:00Z',
+        layers: [],
+        events: [firstEvent],
+        report_available: false,
+      };
+      const completedSnapshot: AnalysisSessionSnapshot = {
+        ...runningSnapshot,
+        status: 'completed',
+        events: [firstEvent, finalEvent],
+      };
+      const asSseResponse = (event: AnalysisProgressEvent) => new Response(
+        `id: ${event.event_id}\nevent: progress\ndata: ${JSON.stringify(event)}\n\n`,
+        { status: 200, headers: { 'Content-Type': 'text/event-stream' } }
+      );
+      const fetchSpy = vi.spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(asSseResponse(firstEvent))
+        .mockResolvedValueOnce(new Response(JSON.stringify(runningSnapshot), { status: 200 }))
+        .mockResolvedValueOnce(asSseResponse(finalEvent))
+        .mockResolvedValueOnce(new Response(JSON.stringify(completedSnapshot), { status: 200 }));
+      const onEvent = vi.fn();
+
+      await streamAnalysisProgress(
+        'session-token',
+        onEvent,
+        vi.fn(),
+        vi.fn(),
+        new AbortController().signal
+      );
+
+      expect(onEvent).toHaveBeenNthCalledWith(1, firstEvent);
+      expect(onEvent).toHaveBeenNthCalledWith(2, finalEvent);
+      expect(fetchSpy.mock.calls[2][0]).toContain('after_id=3');
+      expect(fetchSpy.mock.calls[2][1]?.headers).toMatchObject({ 'Last-Event-ID': '3' });
+    });
+  });
+
   describe('checkHealth', () => {
     it('returns HealthResponse when backend is healthy', async () => {
       const mockHealth = {
@@ -94,9 +219,11 @@ describe('analysisApi Service', () => {
   describe('analyzeResume', () => {
     it('successfully uploads file and returns AnalysisResponse', async () => {
       let capturedFormData: FormData | null = null;
+      let capturedHeaders: HeadersInit | undefined;
 
       vi.spyOn(globalThis, 'fetch').mockImplementationOnce(async (_url, init) => {
         capturedFormData = init?.body as FormData;
+        capturedHeaders = init?.headers;
         return new Response(JSON.stringify(mockSuccessResponse), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
@@ -106,7 +233,7 @@ describe('analysisApi Service', () => {
       const file = new File(['%PDF-1.4 mock content'], 'alex_resume.pdf', { type: 'application/pdf' });
       const jd = 'Looking for Python and FastAPI engineer.';
 
-      const result = await analyzeResume(file, jd);
+      const result = await analyzeResume(file, jd, undefined, 'session-123');
 
       expect(result.overall_score).toBe(84.5);
       expect(result.match_tier).toBe('Strong Match');
@@ -114,6 +241,7 @@ describe('analysisApi Service', () => {
       const fd = capturedFormData as unknown as FormData;
       expect(fd.get('resume_file')).toBeDefined();
       expect(fd.get('job_description')).toBe(jd);
+      expect(capturedHeaders).toMatchObject({ 'X-Analysis-Session-Id': 'session-123' });
     });
 
     it('rejects client-side if file is missing', async () => {
@@ -204,6 +332,35 @@ describe('analysisApi Service', () => {
         'Bullet improvement request failed with HTTP 500'
       );
     });
+
+    describe('exportResume', () => {
+      it('sends the selected ATS template and international format to the export endpoint', async () => {
+        let payload: Record<string, unknown> | null = null;
+        vi.spyOn(globalThis, 'fetch').mockImplementationOnce(async (_url, init) => {
+          payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          return new Response('resume', { status: 200 });
+        });
+        const resume: StructuredResume = {
+          contact_info: { full_name: 'Alex' },
+          summary: '',
+          skills: {},
+          experience: [],
+          projects: [],
+          education: [],
+          certifications: [],
+        };
+
+        await exportResume(resume, 'pdf', 'alex', undefined, {
+          templateId: 'ats-healthcare-teal',
+          internationalFormat: 'uk',
+        });
+
+        expect(payload).toMatchObject({
+          format: 'pdf',
+          template_id: 'ats-healthcare-teal',
+          international_format: 'uk',
+        });
+      });
+    });
   });
 });
-

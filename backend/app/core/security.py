@@ -3,12 +3,90 @@ import tempfile
 import zipfile
 from contextlib import contextmanager
 from typing import Generator
+from fastapi import UploadFile
+from fastapi.responses import JSONResponse
 from app.config import settings
 from app.core.errors import FileSizeExceededError, FileValidationError
 
 
 PDF_MAGIC_BYTES = b"%PDF-"
 ZIP_MAGIC_BYTES = b"PK\x03\x04"
+UPLOAD_REQUEST_PATHS = {
+    f"{settings.API_V1_PREFIX}/analyze",
+    f"{settings.API_V1_PREFIX}/builder/analyze-and-plan",
+    f"{settings.API_V1_PREFIX}/career/profile/resumes/upload",
+    f"{settings.API_V1_PREFIX}/career/salary/offers/analyze",
+}
+
+
+class UploadBodyLimitMiddleware:
+    def __init__(self, app, *, maximum_body_bytes: int, upload_paths: set[str]):
+        self.app = app
+        self.maximum_body_bytes = maximum_body_bytes
+        self.upload_paths = upload_paths
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or scope.get("path") not in self.upload_paths:
+            await self.app(scope, receive, send)
+            return
+
+        headers = dict(scope.get("headers", []))
+        content_length = headers.get(b"content-length")
+        if content_length:
+            try:
+                if int(content_length) > self.maximum_body_bytes:
+                    await self._reject(scope, receive, send)
+                    return
+            except ValueError:
+                pass
+
+        received_bytes = 0
+
+        async def limited_receive():
+            nonlocal received_bytes
+            message = await receive()
+            if message["type"] == "http.request":
+                received_bytes += len(message.get("body", b""))
+                if received_bytes > self.maximum_body_bytes:
+                    raise _UploadBodyTooLarge
+            return message
+
+        try:
+            await self.app(scope, limited_receive, send)
+        except _UploadBodyTooLarge:
+            await self._reject(scope, receive, send)
+
+    async def _reject(self, scope, receive, send):
+        response = JSONResponse(
+            status_code=413,
+            content={
+                "error": {
+                    "code": "FILE_TOO_LARGE",
+                    "message": "The upload request body exceeds the configured size limit.",
+                    "details": {"maximum_body_bytes": self.maximum_body_bytes},
+                }
+            },
+        )
+        await response(scope, receive, send)
+
+
+class _UploadBodyTooLarge(Exception):
+    pass
+
+
+async def read_upload_file(upload: UploadFile) -> bytes:
+    """Read an uploaded file in bounded chunks and reject excess data immediately."""
+    maximum_size = settings.MAX_UPLOAD_SIZE_BYTES
+    chunks: list[bytes] = []
+    total_size = 0
+    while total_size <= maximum_size:
+        chunk = await upload.read(min(64 * 1024, maximum_size - total_size + 1))
+        if not chunk:
+            break
+        total_size += len(chunk)
+        validate_file_size(total_size)
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def validate_file_size(size_bytes: int) -> None:
